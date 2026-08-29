@@ -8,8 +8,14 @@
  *      conflict check against `version`.
  *   3. On accept: writes the new item + an event, marks the
  *      command as `applied`.
- *   4. On reject: writes a `conflicts` document, marks the command
- *      as `rejected` with a human-readable reason.
+ *   4. On reject (structured error): writes a `conflicts` document,
+ *      marks the command as `rejected` with a human-readable reason.
+ *   5. On unhandled exception: writes a `commands/{id}/failures`
+ *      sub-doc, increments `failure_count`. After
+ *      `MAX_FAILURES` the command is moved to `failed` and the
+ *      function returns normally so the trigger stops retrying.
+ *      That gives operators a "this command is poison, fix it
+ *      manually" surface instead of infinite Eventarc retries.
  *
  * Idempotency: a composite index on `(source, source_event_id)`
  * lets the brain quickly reject duplicate commands.
@@ -27,21 +33,53 @@ export interface BrainOptions {
   db?: Firestore;
   /** Override the actor label written to events. */
   actor?: string;
+  /**
+   * Override the dead-letter threshold. After this many recorded
+   * failures, the command is moved to `status: 'failed'` and the
+   * trigger stops retrying. Defaults to 3.
+   */
+  maxFailures?: number;
 }
 
+const DEFAULT_MAX_FAILURES = 3;
+
 /**
- * The trigger entry point. Wired in `index.ts` as a Cloud Function
- * `onDocumentCreated('commands/{id}')` handler.
+ * The trigger entry point. Wired in `functions.ts` as a Cloud Function
+ * `onDocumentWritten('commands/{id}')` handler (so the operator's
+ * `POST /api/commands/{id}/replay` can re-fire the brain). The
+ * `status !== 'queued'` guard below keeps it from looping on the
+ * brain's own status updates.
+ *
+ * `QueryDocumentSnapshot` covers the original `onDocumentCreated`
+ * trigger; `DocumentSnapshot` covers `onDocumentWritten`'s
+ * `event.data.after`. Both expose `data()` identically.
  */
-export async function handleCommandCreated(snap: QueryDocumentSnapshot, opts: BrainOptions = {}): Promise<void> {
+export async function handleCommandCreated(
+  snap: QueryDocumentSnapshot | { data(): unknown },
+  opts: BrainOptions = {},
+): Promise<void> {
   const command = snap.data() as Command;
+  // Skip commands that already reached a terminal status. The
+  // trigger fires on `onDocumentCreated` so this is defensive, but
+  // it also covers the case where an operator manually moves a
+  // command back to a non-terminal state.
+  if (command.status === 'applied' || command.status === 'rejected' || command.status === 'failed') {
+    return;
+  }
   if (command.status !== 'queued') {
-    // The trigger fires on create; status is `queued` from the
-    // command constructor. Defensive check.
+    return;
+  }
+  // Poison-pill guard: if the command has already hit the failure
+  // threshold but somehow is back to `queued` (manual reset),
+  // ensure we don't process it again. The operator must clear
+  // `failed_at` to actually re-enqueue.
+  if (command.failed_at) {
+    console.warn('[brain] command', command.id, 'has failed_at set; skipping');
     return;
   }
   const db = opts.db ?? getDb();
   const actor = opts.actor ?? `brain:trigger`;
+  const maxFailures = opts.maxFailures ?? DEFAULT_MAX_FAILURES;
 
   // 1. Idempotency: if a command with the same
   //    (source, source_event_id) already exists with status
@@ -75,11 +113,34 @@ export async function handleCommandCreated(snap: QueryDocumentSnapshot, opts: Br
     await markApplied(db, command, result?.event.id ?? null);
   } catch (err) {
     if (err instanceof WorkTrackerError) {
+      // Structured error: the command payload violated an
+      // invariant (bad status transition, version mismatch,
+      // unknown source, etc.). Mark as `rejected` immediately;
+      // no need to retry.
       await recordConflictAndReject(db, command, err.code, err.message, actor);
       return;
     }
-    // Unknown failure: log and re-throw so the trigger retries.
-    console.error('[brain] unknown failure processing command', command.id, err);
+    // Unknown failure: record and decide whether to give up.
+    const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack ?? null : null;
+    const nextCount = (command.failure_count ?? 0) + 1;
+    await recordFailure(db, command, nextCount, 'internal_error', message, stack);
+    if (nextCount >= maxFailures) {
+      // Move to the dead-letter state. The function returns
+      // normally (no re-throw) so the Eventarc trigger stops
+      // retrying and the source can introspect `commands/{id}`
+      // and `commands/{id}/failures/` to diagnose.
+      await markFailed(db, command, message);
+      console.error(
+        '[brain] command',
+        command.id,
+        'reached failure threshold; marked as failed. Last error:',
+        message,
+      );
+      return;
+    }
+    // Re-throw so Eventarc retries. The next attempt will see
+    // the incremented failure_count.
     throw err;
   }
 }
@@ -160,4 +221,43 @@ async function recordConflictAndReject(
 ): Promise<void> {
   const reason = `${code}: ${message}`;
   await markRejected(db, command, reason, actor);
+}
+
+export async function recordFailure(
+  db: Firestore,
+  command: Command,
+  attempt: number,
+  code: string,
+  message: string,
+  stack: string | null,
+): Promise<void> {
+  const now = nowIso();
+  const failureId = ulid();
+  // Truncate the stack to 4KB so a runaway exception doesn't
+  // bloat the failure document.
+  const truncatedStack = stack && stack.length > 4096 ? `${stack.slice(0, 4096)}…` : stack;
+  await db.runTransaction(async (tx) => {
+    tx.set(db.collection('commands').doc(command.id).collection('failures').doc(failureId), {
+      id: failureId,
+      command_id: command.id,
+      attempt,
+      code,
+      message: message.slice(0, 4000),
+      stack: truncatedStack,
+      occurred_at: now,
+    });
+    tx.update(db.collection('commands').doc(command.id), {
+      failure_count: attempt,
+      error: `${code}: ${message}`.slice(0, 4000),
+    });
+  });
+}
+
+export async function markFailed(db: Firestore, command: Command, lastMessage: string): Promise<void> {
+  const now = nowIso();
+  await db.collection('commands').doc(command.id).update({
+    status: 'failed',
+    error: lastMessage.slice(0, 4000),
+    failed_at: now,
+  });
 }

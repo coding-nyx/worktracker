@@ -58,7 +58,7 @@ function extractBearer(req: FastifyRequest): string | null {
  * Admin-only. Used for source registration, conflict resolution,
  * the Hermes bridge, etc.
  */
-export function requireAdmin(req: FastifyRequest, _reply: FastifyReply): void {
+export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
   const token = extractBearer(req);
   if (!token || token !== ADMIN_TOKEN) {
     throw new UnauthorizedError('admin token invalid');

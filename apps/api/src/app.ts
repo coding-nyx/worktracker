@@ -17,6 +17,69 @@ export async function buildApp(): Promise<FastifyInstance> {
     disableRequestLogging: false,
   });
 
+  // Replace Fastify's default JSON content-type parser. The default
+  // parser (rawBody, gated by parseAs:'string' or parseAs:'buffer')
+  // waits for the request stream's `end` event before completing.
+  // On Cloud Run's HTTP/1.1 frontend, `end` never fires after the
+  // body is fully sent (the connection stays alive), so the parser
+  // hangs until the 60s request timeout kills the request.
+  //
+  // The fix is to register a parser WITHOUT the `parseAs` option —
+  // that bypasses the internal `rawBody` method and gives us the
+  // raw payload stream directly. We then read it manually and
+  // complete the parse as soon as Content-Length bytes have been
+  // received, with `end` as a fallback for the no-Content-Length
+  // case. See fastify/fastify#3382 for the matching Cloud
+  // Functions bug; the same workaround applies to Cloud Run.
+  app.removeContentTypeParser(['application/json']);
+  app.addContentTypeParser('application/json', (req, payload, done) => {
+    const contentLength = Number(req.headers['content-length']) || 0;
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let finished = false;
+
+    const finish = (err: Error | null, value?: unknown): void => {
+      if (finished) return;
+      finished = true;
+      payload.removeAllListeners('data');
+      payload.removeAllListeners('end');
+      payload.removeAllListeners('error');
+      if (err) {
+        (err as Error & { statusCode?: number }).statusCode =
+          (err as Error & { statusCode?: number }).statusCode ?? 400;
+        done(err, undefined);
+        return;
+      }
+      done(null, value);
+    };
+
+    payload.on('data', (chunk: Buffer) => {
+      if (finished) return;
+      chunks.push(chunk);
+      received += chunk.length;
+      if (contentLength > 0 && received >= contentLength) {
+        try {
+          const body = Buffer.concat(chunks).toString('utf8');
+          finish(null, body.length === 0 ? {} : JSON.parse(body));
+        } catch (err) {
+          finish(err as Error);
+        }
+      }
+    });
+
+    payload.on('end', () => {
+      if (finished) return;
+      try {
+        const body = Buffer.concat(chunks).toString('utf8');
+        finish(null, body.length === 0 ? {} : JSON.parse(body));
+      } catch (err) {
+        finish(err as Error);
+      }
+    });
+
+    payload.on('error', (err: Error) => finish(err));
+  });
+
   // Set up CORS for the browser UI. Bearer tokens mean we
   // can't use cookie auth, so wildcard origin is fine for
   // v0; tighten in v0.5.
@@ -80,6 +143,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await sourcesRoutes(app);
   const { commandsRoutes } = await import('./routes/commands.js');
   await commandsRoutes(app);
+  const { commandsAdminRoutes } = await import('./routes/commands-admin.js');
+  await commandsAdminRoutes(app);
   const { webhookRoutes } = await import('./routes/webhooks.js');
   await webhookRoutes(app);
   const { mcpRoutes } = await import('./mcp.js');

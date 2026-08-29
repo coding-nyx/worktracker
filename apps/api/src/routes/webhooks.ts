@@ -70,6 +70,8 @@ function translateWebhook(
     applied_event_id: null,
     created_at: now,
     applied_at: null,
+    failure_count: 0,
+    failed_at: null,
   };
   // Minimal mapping; expand per source as we wire connectors.
   switch (body.event) {

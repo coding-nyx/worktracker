@@ -49,6 +49,8 @@ test('create + transition + reject a version conflict', async () => {
     applied_event_id: null,
     created_at: new Date().toISOString(),
     applied_at: null,
+    failure_count: 0,
+    failed_at: null,
   });
 
   // 2. Wait for the brain to apply. The Cloud Function trigger
@@ -93,6 +95,8 @@ test('create + transition + reject a version conflict', async () => {
     applied_event_id: null,
     created_at: new Date().toISOString(),
     applied_at: null,
+    failure_count: 0,
+    failed_at: null,
   });
   await handleCommandCreated((await db.collection('commands').doc('cmd-update-ok').get()));
   const after2 = await db.collection('commands').doc('cmd-update-ok').get();
@@ -110,6 +114,8 @@ test('create + transition + reject a version conflict', async () => {
     applied_event_id: null,
     created_at: new Date().toISOString(),
     applied_at: null,
+    failure_count: 0,
+    failed_at: null,
   });
   await handleCommandCreated((await db.collection('commands').doc('cmd-update-stale').get()));
   const after3 = await db.collection('commands').doc('cmd-update-stale').get();
@@ -123,3 +129,57 @@ test('create + transition + reject a version conflict', async () => {
     .get();
   assert.equal(conflicts.docs.length, 1);
 });
+
+test('dead-letter: command with non-existent source after retries → status=failed', async () => {
+  // Simulate a command that the brain will repeatedly fail to
+  // apply. The brain trigger only runs in Cloud Functions, so we
+  // test the dead-letter primitives directly: recordFailure
+  // increments failure_count and markFailed flips the status.
+  // We assert on the public surfaces (commands/{id}.status and
+  // commands/{id}/failures sub-collection).
+  const { recordFailure, markFailed } = await import('../src/brain.js');
+  const { ulid } = await import('../src/ids.js');
+  const cmdId = 'cmd-deadletter-' + Date.now();
+  await db.collection('commands').doc(cmdId).set({
+    id: cmdId,
+    source: 'test',
+    source_event_id: null,
+    op: 'create',
+    item_id: null,
+    payload: { kind: 'task', title: 'deadletter' },
+    status: 'queued',
+    error: null,
+    applied_event_id: null,
+    created_at: new Date().toISOString(),
+    applied_at: null,
+    failure_count: 0,
+    failed_at: null,
+  });
+  const cmdRef = db.collection('commands').doc(cmdId);
+  // Simulate three recorded failures.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await recordFailure(
+      db,
+      (await cmdRef.get()).data() as any,
+      attempt,
+      'internal_error',
+      `simulated failure #${attempt}`,
+      'stack-trace-stub',
+    );
+  }
+  // After three failures, mark as failed.
+  await markFailed(db, (await cmdRef.get()).data() as any, 'simulated failure #3');
+  const finalDoc = await cmdRef.get();
+  const data = finalDoc.data() as any;
+  assert.equal(data.status, 'failed');
+  assert.equal(data.failure_count, 3);
+  assert.ok(data.failed_at, 'failed_at should be set');
+  // Failures sub-collection should have 3 entries.
+  const failures = await cmdRef.collection('failures').orderBy('attempt', 'asc').get();
+  assert.equal(failures.docs.length, 3);
+  assert.equal(failures.docs[0].data().attempt, 1);
+  assert.equal(failures.docs[2].data().attempt, 3);
+  // Cleanup.
+  await cmdRef.delete();
+});
+

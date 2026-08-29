@@ -1,6 +1,13 @@
 /**
  * Command debug routes. Read-only — for the Sources view's
  * "recent commands" panel and for the e2e test harness.
+ *
+ * Dead-letter admin routes (POST /api/commands/{id}/replay and
+ * GET /api/commands/{id}/failures) are defined in
+ * `commands-admin.ts` and registered separately to keep the
+ * surface here narrow. The brain itself records failures to
+ * `commands/{id}/failures` and marks commands as `failed` after
+ * WORKTRACKER_BRAIN_MAX_FAILURES retries — see `src/brain.ts`.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -10,7 +17,7 @@ import { requireSource } from '../auth.js';
 import type { Command } from '../local-types/index';
 
 const ListQuerySchema = z.object({
-  status: z.enum(['queued', 'evaluating', 'applied', 'rejected']).optional(),
+  status: z.enum(['queued', 'evaluating', 'applied', 'rejected', 'failed']).optional(),
   source: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });

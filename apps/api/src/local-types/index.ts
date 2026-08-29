@@ -239,8 +239,27 @@ export const COMMAND_STATUSES = [
   'evaluating',
   'applied',
   'rejected',
+  'failed',
 ] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
+
+/**
+ * One recorded brain failure. Stored at
+ * `commands/{commandId}/failures/{failureId}` so a long stream of
+ * failures doesn't bloat the command document, and so an operator
+ * can see the history of a single misbehaving command.
+ */
+export interface CommandFailure {
+  id: string;
+  command_id: string;
+  attempt: number;
+  /** Short error code, e.g. `validation_error`, `internal_error`. */
+  code: string;
+  message: string;
+  /** Optional stack trace, capped to 4KB. */
+  stack: string | null;
+  occurred_at: string;
+}
 
 export interface CommandPayloadMap {
   create: CreateCommandPayload;
@@ -332,6 +351,10 @@ export type CommandOpByType = {
     applied_event_id: string | null;
     created_at: string;
     applied_at: string | null;
+    /** Number of times the brain has attempted and failed. */
+    failure_count: number;
+    /** When the brain gave up (status = failed). */
+    failed_at: string | null;
   };
 };
 
