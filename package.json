@@ -1,0 +1,29 @@
+{
+  "name": "worktracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unified work tracker across every tool the user works in. Backend (Fastify + Cloud Functions v2), Mac daemon, Hermes connector, and Next.js UI.",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:api": "npm run dev --workspace=@worktracker/api",
+    "dev:web": "npm run dev --workspace=@worktracker/web",
+    "emulators": "firebase emulators:start --only firestore,functions,auth,hosting",
+    "deploy": "npm run build --workspaces && firebase deploy"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^22.5.0",
+    "firebase-tools": "^15.0.0"
+  }
+}

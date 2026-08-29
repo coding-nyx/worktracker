@@ -1,0 +1,11 @@
+node_modules
+dist
+.env*
+*.log
+.firebase
+.firebase-cache
+test-results
+coverage
+.git
+.gitignore
+.DS_Store

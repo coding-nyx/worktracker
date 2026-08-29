@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "worktracker-local",
+    "worktracker-local": "worktracker-local"
+  }
+}

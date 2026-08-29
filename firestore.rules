@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// WorkTracker Firestore security rules.
+// v0 is single-user; the rules below are intentionally permissive
+// inside the per-source server context (the Cloud Function and the
+// Firestore-trigger brain run as the service account and bypass
+// these rules). The rules are a defense-in-depth check for any
+// client-side access (the web UI uses Firebase Auth, the public
+// REST API runs server-side).
+//
+// When the user later opens this up to multi-user, tighten these
+// to enforce row-level auth.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Work items: read by anyone with a valid Firebase Auth token
+    // (or the admin SDK on the server). Writes only from the
+    // server context (admin SDK) or via Cloud Functions.
+    match /work_items/{itemId} {
+      allow read: if request.auth != null;
+      allow write: if false; // server-only via admin SDK
+
+      match /events/{eventId} {
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+    }
+
+    // Sources: server-only.
+    match /sources/{sourceName} {
+      allow read, write: if false;
+    }
+
+    // Commands: server-only (the brain trigger handles them).
+    match /commands/{commandId} {
+      allow read, write: if false;
+    }
+
+    // Conflicts: readable by the user; server-only writes.
+    match /conflicts/{conflictId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // v0.5: reminders, notification_groups, notification_deliveries
+    // are all server-only for now.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

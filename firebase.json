@@ -1,0 +1,57 @@
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "apps/api",
+      "codebase": "worktracker-brain",
+      "runtime": "nodejs22",
+      "predeploy": [
+        "npm --workspace=@worktracker/api run build:functions"
+      ],
+      "ignore": [
+        "Dockerfile",
+        ".dockerignore",
+        "**/Dockerfile*"
+      ]
+    }
+  ],
+  "hosting": {
+    "public": "web/out",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "/mcp",
+        "run": {
+          "serviceId": "worktracker-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "/api/**",
+        "run": {
+          "serviceId": "worktracker-api",
+          "region": "us-central1"
+        }
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  },
+  "emulators": {
+    "auth": { "port": 9099 },
+    "functions": { "port": 5001 },
+    "firestore": { "port": 8080 },
+    "hosting": { "port": 5000 },
+    "ui": { "enabled": true, "port": 4000 },
+    "singleProjectMode": true
+  }
+}
