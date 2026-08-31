@@ -3,6 +3,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../../lib/api';
+import { Modal } from '../../components/Modal';
+import { EmptyState } from '../../components/EmptyState';
+import { Pill } from '../../components/Pill';
 
 export default function SourcesPage() {
   const { data, isLoading, error } = useQuery({
@@ -13,59 +16,90 @@ export default function SourcesPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Sources</h1>
-          <p className="text-sm text-slate-500">Connectors that submit work items to WorkTracker.</p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">connectors</p>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-1">Sources</h1>
+          <p className="text-[13px] text-ink-2">Connectors that submit work items to WorkTracker.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowCreate(true)}
-          className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-        >
+        <button type="button" onClick={() => setShowCreate(true)} className="btn-primary focus-ring">
           Register source
         </button>
       </header>
 
-      {isLoading ? <p className="text-sm text-slate-500">Loading…</p> : null}
-      {error ? <p className="text-sm text-rose-600">Failed to load sources.</p> : null}
+      {isLoading ? (
+        <ul className="grid gap-4 md:grid-cols-2">
+          {[0, 1, 2].map((i) => (
+            <li key={i} className="skeleton h-28" />
+          ))}
+        </ul>
+      ) : null}
+      {error ? <p className="text-[13px] text-status-blocked-600">Failed to load sources.</p> : null}
 
       {data ? (
-        <ul className="space-y-3">
+        <ul className="grid gap-4 md:grid-cols-2">
           {data.sources.map((s) => (
             <li key={s.name} className="card p-4">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="font-semibold text-slate-900">{s.display_name}</h2>
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <h2 className="text-[15px] font-semibold tracking-tight text-ink-1">
+                      {s.display_name}
+                    </h2>
+                    <Pill kind="backlog" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
                       {s.kind}
-                    </span>
+                    </Pill>
                     {s.enabled ? (
-                      <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-700">
+                      <Pill kind="done" dot={false} className="!ring-status-done-500/30 !bg-status-done-500/10 !text-status-done-600">
                         enabled
-                      </span>
+                      </Pill>
                     ) : (
-                      <span className="rounded bg-rose-50 px-1.5 py-0.5 text-xs text-rose-700">
+                      <Pill kind="blocked" dot={false} className="!ring-status-blocked-500/30 !bg-status-blocked-500/10 !text-status-blocked-600">
                         disabled
-                      </span>
+                      </Pill>
                     )}
                   </div>
-                  <p className="mt-1 text-xs text-slate-500">{s.name}</p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Capabilities: {s.capabilities.join(', ') || 'none'}
-                  </p>
+                  <p className="font-mono text-[11px] text-ink-3">{s.name}</p>
+                  <div className="flex flex-wrap gap-1">
+                    {s.capabilities.length > 0 ? (
+                      s.capabilities.map((c) => (
+                        <Pill
+                          key={c}
+                          kind="backlog"
+                          dot={false}
+                          className="!ring-border-subtle !bg-bg-sunken !text-ink-3"
+                        >
+                          {c}
+                        </Pill>
+                      ))
+                    ) : (
+                      <span className="text-[12px] text-ink-4">no capabilities</span>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right text-xs text-slate-500">
-                  <p>last sync: {s.last_sync_at ? new Date(s.last_sync_at).toLocaleString() : 'never'}</p>
-                  {s.last_error ? <p className="text-rose-600">error: {s.last_error}</p> : null}
+                <div className="shrink-0 space-y-0.5 text-right text-[11px] text-ink-3">
+                  <p>
+                    last sync:{' '}
+                    <span className="text-ink-2">
+                      {s.last_sync_at ? new Date(s.last_sync_at).toLocaleString() : 'never'}
+                    </span>
+                  </p>
+                  {s.last_error ? <p className="text-status-blocked-600">error: {s.last_error}</p> : null}
                 </div>
               </div>
             </li>
           ))}
           {data.sources.length === 0 ? (
-            <li className="card p-6 text-center text-sm text-slate-500">
-              No sources registered yet. Click "Register source" to add one.
+            <li className="md:col-span-2">
+              <EmptyState
+                title="No sources yet"
+                body="Click Register source to add one. The manifest reference is in the next step."
+                action={
+                  <button type="button" onClick={() => setShowCreate(true)} className="btn-primary focus-ring">
+                    Register source
+                  </button>
+                }
+              />
             </li>
           ) : null}
         </ul>
@@ -106,61 +140,50 @@ function CreateSourceModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        className="card w-full max-w-2xl p-6"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="text-lg font-semibold">Register source</h2>
-        <p className="mt-1 text-sm text-slate-500">Paste a manifest.json. The API key is shown once.</p>
-
-        {apiKey ? (
-          <div className="mt-4 space-y-2">
-            <p className="text-sm font-medium text-emerald-700">Source created.</p>
-            <p className="text-xs text-slate-600">
-              API key (save this — it is shown only once):
-            </p>
-            <pre className="overflow-x-auto rounded bg-slate-900 p-3 text-xs text-emerald-200">
-              {apiKey}
-            </pre>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-            >
-              Done
-            </button>
-          </div>
+    <Modal
+      open
+      onClose={onClose}
+      title="Register source"
+      size="lg"
+      footer={
+        apiKey ? (
+          <button type="button" onClick={onClose} className="btn-primary focus-ring">
+            Done
+          </button>
         ) : (
-          <div className="mt-4 space-y-3">
-            <textarea
-              value={manifestText}
-              onChange={(e) => setManifestText(e.target.value)}
-              className="h-64 w-full rounded border border-slate-300 p-2 font-mono text-xs"
-            />
-            {error ? <p className="text-xs text-rose-600">{error}</p> : null}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded border border-slate-300 px-3 py-1.5 text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submit}
-                className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-              >
-                Create
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+          <>
+            <button type="button" onClick={onClose} className="btn-secondary focus-ring">
+              Cancel
+            </button>
+            <button type="button" onClick={submit} className="btn-primary focus-ring">
+              Create
+            </button>
+          </>
+        )
+      }
+    >
+      <p className="text-[13px] text-ink-2">
+        Paste a <code className="rounded bg-bg-sunken px-1.5 py-0.5 text-ink-1">manifest.json</code>. The API key is shown once after creation — copy it then.
+      </p>
+
+      {apiKey ? (
+        <div className="mt-4 space-y-2">
+          <p className="text-[13px] font-medium text-status-done-600">Source created.</p>
+          <p className="text-[12px] text-ink-3">API key (save this — it is shown only once):</p>
+          <pre className="card-inset overflow-x-auto p-3 font-mono text-[12px] text-status-done-600">
+            {apiKey}
+          </pre>
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <textarea
+            value={manifestText}
+            onChange={(e) => setManifestText(e.target.value)}
+            className="field h-64 font-mono text-[12px] leading-5"
+          />
+          {error ? <p className="text-[12px] text-status-blocked-600">{error}</p> : null}
+        </div>
+      )}
+    </Modal>
   );
 }

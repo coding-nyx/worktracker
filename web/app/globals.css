@@ -2,25 +2,195 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: 250 250 252;
-  --foreground: 24 28 36;
-  --card: 255 255 255;
-  --border: 226 232 240;
-  --muted: 100 116 139;
-  --accent: 59 108 255;
+/* ------------------------------------------------------------------------- */
+/* Theme tokens — dark is the default. The [data-theme="light"] block on
+   <html> re-binds the same names to a light palette. Everything in the
+   app reads from `rgb(var(--token))` so a theme flip is one attribute
+   change. */
+
+:root,
+:root[data-theme='dark'] {
+  /* Surfaces — cool near-black with a hint of blue, slightly
+     desaturated so brand accents pop. */
+  --bg-base:     10 12 18;       /* page background */
+  --bg-surface:  20 23 31;      /* cards, columns, panels */
+  --bg-raised:   27 31 41;      /* popovers, modals, hover */
+  --bg-sunken:   6 7 11;        /* inset wells, code blocks */
+
+  /* Borders — barely-there by default, stronger for emphasis. */
+  --border-subtle:  35 39 51;
+  --border-default: 47 53 68;
+  --border-strong:  74 82 102;
+
+  /* Ink — three steps of contrast. */
+  --ink-1: 245 246 249;   /* primary text */
+  --ink-2: 161 166 181;   /* secondary text */
+  --ink-3: 108 113 133;   /* tertiary text / icons */
+  --ink-4: 70 75 92;      /* disabled / placeholder */
+
+  /* Status hues — used by the column header, the card pill, the
+     counter dot. Light enough to read on dark, saturated enough
+     to be glanceable. */
+  --status-backlog-50:  243 244 248;  --status-backlog-500: 148 156 175;  --status-backlog-600: 203 209 220;
+  --status-ready-50:    219 234 254;  --status-ready-500:    96 165 250;  --status-ready-600:    147 197 253;
+  --status-progress-50: 254 243 199;  --status-progress-500: 245 158 11;  --status-progress-600: 253 186 116;
+  --status-blocked-50:  254 226 226;  --status-blocked-500:  239 68 68;  --status-blocked-600:   252 165 165;
+  --status-review-50:   237 233 254;  --status-review-500:   139 92 246; --status-review-600:    196 181 253;
+  --status-done-50:     220 252 231;  --status-done-500:     34 197 94;  --status-done-600:      134 239 172;
+}
+
+:root[data-theme='light'] {
+  --bg-base:     248 249 251;
+  --bg-surface:  255 255 255;
+  --bg-raised:   255 255 255;
+  --bg-sunken:   241 243 248;
+
+  --border-subtle:  230 233 240;
+  --border-default: 215 220 230;
+  --border-strong:  184 192 208;
+
+  --ink-1: 15 18 28;
+  --ink-2: 71 80 96;
+  --ink-3: 110 118 138;
+  --ink-4: 156 162 178;
+
+  --status-backlog-50:  241 243 248;  --status-backlog-500:  100 110 130;  --status-backlog-600:  55 65 81;
+  --status-ready-50:    226 239 254;  --status-ready-500:    37 99 235;   --status-ready-600:     29 78 184;
+  --status-progress-50: 254 240 207;  --status-progress-500: 202 122 8;   --status-progress-600:  146 87 4;
+  --status-blocked-50:  254 226 226;  --status-blocked-500:  220 38 38;  --status-blocked-600:   185 28 28;
+  --status-review-50:   238 232 255;  --status-review-500:   109 70 198; --status-review-600:    79 49 152;
+  --status-done-50:     220 252 226;  --status-done-500:     21 128 61;  --status-done-600:      22 101 52;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Base — typography, smooth scrollbar, the radial background, focus ring. */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  font-feature-settings: 'cv11', 'ss01', 'cv02';
 }
 
 body {
-  background: rgb(var(--background));
-  color: rgb(var(--foreground));
+  background-color: rgb(var(--bg-base));
+  color: rgb(var(--ink-1));
   font-family: 'Avenir Next', Avenir, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-feature-settings: 'cv11', 'ss01';
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+  background-image: theme('backgroundImage.page-dark');
+  background-attachment: fixed;
+  min-height: 100vh;
 }
 
-.card {
-  background: rgb(var(--card));
-  border: 1px solid rgb(var(--border));
-  border-radius: 0.625rem;
+:root[data-theme='light'] body {
+  background-image: radial-gradient(1200px 800px at 50% -10%, rgb(59 108 255 / 0.06), transparent 60%);
+}
+
+::selection {
+  background: rgb(59 108 255 / 0.35);
+  color: rgb(var(--ink-1));
+}
+
+/* Scrollbar — subtle on the surface, full on hover. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--border-default)) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgb(var(--border-default));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--border-strong)); background-clip: padding-box; }
+
+/* Focus — visible but never ugly. */
+:focus-visible {
+  outline: 2px solid rgb(59 108 255);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Component primitives — composed via @layer components so utilities
+   still win, but the recurring shapes (card, pill, button) live once. */
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-border-subtle bg-bg-surface shadow-card;
+  }
+  .card-raised {
+    @apply rounded-2xl border border-border-default bg-bg-raised shadow-card-lg;
+  }
+  .card-inset {
+    @apply rounded-xl border border-border-subtle bg-bg-sunken;
+  }
+  .hairline {
+    @apply h-px w-full bg-border-subtle;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ring-1 ring-inset;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium leading-5 transition-all duration-150 ease-out-quint disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-brand-500 text-white shadow-glow hover:bg-brand-400 active:translate-y-px;
+  }
+  .btn-secondary {
+    @apply btn border border-border-default bg-bg-surface text-ink-1 hover:border-border-strong hover:bg-bg-raised;
+  }
+  .btn-ghost {
+    @apply btn text-ink-2 hover:bg-bg-raised hover:text-ink-1;
+  }
+  .btn-danger {
+    @apply btn border border-danger-500/30 bg-danger-500/10 text-danger-500 hover:bg-danger-500/20;
+  }
+  .field {
+    @apply w-full rounded-lg border border-border-default bg-bg-surface px-3 py-2 text-sm text-ink-1 placeholder:text-ink-4 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30;
+  }
+  .nav-link {
+    @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-2 transition-colors hover:bg-bg-raised hover:text-ink-1;
+  }
+  .nav-link-active {
+    @apply text-ink-1;
+  }
+  .kbd {
+    @apply rounded border border-border-default bg-bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-ink-3;
+  }
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-bg-raised;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0;
+    background-image: theme('backgroundImage.shimmer');
+    background-size: 200% 100%;
+    animation: shimmer 1.6s linear infinite;
+  }
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base;
+  }
+  /* Live status dot — the pulsing indicator for "live updates" etc. */
+  .live-dot {
+    @apply relative inline-block h-1.5 w-1.5 rounded-full bg-success-500;
+  }
+  .live-dot::after {
+    content: '';
+    @apply absolute inset-0 rounded-full bg-success-500;
+    animation: pulse-ring 1.8s ease-out infinite;
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Reduced motion — disable the springy transitions for users who ask
+   the OS to. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }

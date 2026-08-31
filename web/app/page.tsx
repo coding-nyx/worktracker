@@ -14,7 +14,6 @@ import {
 } from '@dnd-kit/core';
 import type {
   Board,
-  BoardColumn,
   WorkItem,
   WorkItemStatus,
   WorkItemKind,
@@ -22,6 +21,8 @@ import type {
 import { api, getCredentials, setCredentials as setApiCredentials } from '../lib/api';
 import { CREDENTIALS_BOOTSTRAPPED_EVENT } from './providers';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
+import { Pill, statusToPillKind, type StatusKind } from '../components/Pill';
+import { EmptyState } from '../components/EmptyState';
 
 const ACTIVE_BOARD_KEY = 'worktracker.active_board_id';
 
@@ -36,23 +37,32 @@ const FALLBACK_COLUMNS: { id: string; label: string; statuses: string[] }[] = [
   { id: 'done', label: 'Done', statuses: ['done', 'cancelled'] },
 ];
 
+// Map a fallback column id to a pill kind so the headers get the
+// right status hue.
+const FALLBACK_COLUMN_KIND: Record<string, StatusKind> = {
+  open: 'backlog',
+  ready: 'ready',
+  in_progress: 'progress',
+  blocked: 'blocked',
+  done: 'done',
+};
+
 export default function HomePage() {
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<string>('');
 
-  // Active board. Persisted in localStorage; falls back to the
-  // first board (typically is_default=true).
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setActiveBoardId(window.localStorage.getItem(ACTIVE_BOARD_KEY));
   }, []);
 
-  // Live items via Firestore onSnapshot. The hook handles
-  // initial fetch, live updates, and cleanup.
   const { items, error: liveError } = useItemsSubscription({ source: sourceFilter || undefined });
+  // useItemsSubscription returns `error: string | null`; coerce to
+  // an Error-shaped value so the rest of the page can pass it
+  // through uniformly.
+  const liveErrorObj: Error | null = liveError ? new Error(liveError) : null;
 
-  // Fall back to REST if Firestore isn't configured.
   const { data: restData } = useQuery({
     queryKey: ['items', sourceFilter],
     queryFn: () => api.listItems({ source: sourceFilter || undefined, limit: 200 }),
@@ -67,16 +77,12 @@ export default function HomePage() {
   });
   const sources = sourcesData?.sources ?? [];
 
-  // Boards. Picker reads from this list.
   const { data: boardsData } = useQuery({
     queryKey: ['boards'],
     queryFn: () => api.listBoards(),
   });
   const boards = boardsData?.boards ?? [];
 
-  // Resolve the active board: explicit id from localStorage,
-  // then the first board with is_default=true, then the first
-  // board at all, then null (which triggers the fallback).
   const activeBoard: Board | null = useMemo(() => {
     if (boards.length === 0) return null;
     if (activeBoardId) {
@@ -88,8 +94,6 @@ export default function HomePage() {
     return boards[0] ?? null;
   }, [boards, activeBoardId]);
 
-  // If the persisted activeBoardId doesn't exist in the new
-  // boards list, clear it so the default takes over.
   useEffect(() => {
     if (activeBoardId && boards.length > 0 && !boards.find((b) => b.id === activeBoardId)) {
       setActiveBoardId(null);
@@ -105,8 +109,6 @@ export default function HomePage() {
     }
   }, []);
 
-  // Filter items by the board's kind filter (if any), then drop
-  // archived items.
   const boardKinds: WorkItemKind[] | null = activeBoard?.kinds ?? null;
   const visibleItems = useMemo(() => {
     if (!boardKinds || boardKinds.length === 0) return itemsToShow.filter((i) => !i.archived_at);
@@ -114,13 +116,20 @@ export default function HomePage() {
     return itemsToShow.filter((i) => set.has(i.kind) && !i.archived_at);
   }, [itemsToShow, boardKinds]);
 
-  // Columns: from the active board if present, else the fallback.
-  // The fallback matches v0's hard-coded task columns so the
-  // page is usable on first load.
   const boardColumns: { id: string; label: string; statuses: string[] }[] = useMemo(() => {
     if (!activeBoard) return FALLBACK_COLUMNS;
     return activeBoard.columns.map((c) => ({ id: c.id, label: c.label, statuses: c.statuses }));
   }, [activeBoard]);
+
+  // Map column id → pill kind. The fallback table is explicit; for
+  // real boards we derive from the column's first status.
+  const columnKind = useCallback(
+    (id: string, statuses: string[]): StatusKind => {
+      if (FALLBACK_COLUMN_KIND[id]) return FALLBACK_COLUMN_KIND[id];
+      return statusToPillKind(statuses[0] ?? '');
+    },
+    [],
+  );
 
   const transition = useMutation({
     mutationFn: async ({ id, to_status, expected_version }: { id: string; to_status: WorkItemStatus; expected_version: number }) =>
@@ -137,9 +146,6 @@ export default function HomePage() {
     if (!over) return;
     const item = visibleItems.find((i) => i.id === active.id);
     if (!item) return;
-    // The drop target is the column id. We need to find a valid
-    // status to transition to. Pick the first status in the
-    // column's status list.
     const col = boardColumns.find((c) => c.id === over.id);
     if (!col || col.statuses.length === 0) return;
     const targetStatus = col.statuses[0] as WorkItemStatus;
@@ -150,107 +156,96 @@ export default function HomePage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Kanban</h1>
-          <p className="text-sm text-slate-500">
-            {visibleItems.length} items · {activeBoard ? activeBoard.name : 'no board'} · live via Firestore
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <BoardPicker
-            boards={boards}
-            activeBoardId={activeBoard?.id ?? null}
-            onChange={onBoardChange}
-          />
-          <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600" htmlFor="source-filter">Source</label>
-            <select
-              id="source-filter"
-              value={sourceFilter}
-              onChange={(e) => setSourceFilter(e.target.value)}
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-            >
-              <option value="">All</option>
-              {sources.map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <CredentialsGate />
-        </div>
-      </header>
-
-      {liveError ? (
-        <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-          Live updates unavailable ({liveError}). Showing last REST snapshot.
-        </p>
-      ) : null}
+      <PageHeader
+        items={visibleItems}
+        boardName={activeBoard?.name ?? null}
+        liveOk={!liveError}
+        liveError={liveErrorObj}
+        boards={boards}
+        activeBoardId={activeBoard?.id ?? null}
+        onBoardChange={onBoardChange}
+        sourceFilter={sourceFilter}
+        onSourceFilterChange={setSourceFilter}
+        sources={sources}
+      />
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <div className={`grid gap-4 ${boardColumns.length <= 3 ? 'md:grid-cols-3' : 'md:grid-cols-3 lg:grid-cols-5'}`}>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {boardColumns.map((col) => (
             <KanbanColumn
               key={col.id}
               id={col.id}
               label={col.label}
+              kind={columnKind(col.id, col.statuses)}
               items={visibleItems.filter((i) => col.statuses.includes(i.status))}
             />
           ))}
         </div>
       </DndContext>
 
-      {visibleItems.some((i) => !boardColumns.some((c) => c.statuses.includes(i.status))) ? (
-        <section>
-          <h2 className="text-sm font-semibold text-slate-500">Unbucketed</h2>
-          <p className="mt-1 text-xs text-slate-400">
-            Items in this list have a status no current board column captures.
-            Add the status to a column or switch boards to see them.
-          </p>
-          <ul className="mt-2 space-y-2">
-            {visibleItems
-              .filter((i) => !boardColumns.some((c) => c.statuses.includes(i.status)))
-              .map((item) => (
-                <li key={item.id} className="card px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                      {item.kind}
-                    </span>
-                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">
-                      {item.status}
-                    </span>
-                    <span className="font-medium">{item.title}</span>
-                  </div>
-                </li>
-              ))}
-          </ul>
-        </section>
-      ) : null}
+      <UnbucketedSection items={visibleItems} boardColumns={boardColumns} />
+      <HiddenByKindSection items={visibleItems} boardKinds={boardKinds} activeBoardName={activeBoard?.name ?? null} />
+    </div>
+  );
+}
 
-      {visibleItems.some((i) => boardKinds && !boardKinds.includes(i.kind)) ? (
-        <section>
-          <h2 className="text-sm font-semibold text-slate-500">Hidden by board kind filter</h2>
-          <p className="mt-1 text-xs text-slate-400">
-            Board <code className="rounded bg-slate-100 px-1 py-0.5">{activeBoard?.name}</code> restricts
-            to kinds: {boardKinds?.join(', ')}. Items of other kinds are listed below.
+/* -------------------------------------------------------------------------- */
+/* Header — page title + live status + board picker + source filter.          */
+
+function PageHeader({
+  items,
+  boardName,
+  liveOk,
+  liveError,
+  boards,
+  activeBoardId,
+  onBoardChange,
+  sourceFilter,
+  onSourceFilterChange,
+  sources,
+}: {
+  items: WorkItem[];
+  boardName: string | null;
+  liveOk: boolean;
+  liveError: Error | null;
+  boards: Board[];
+  activeBoardId: string | null;
+  onBoardChange: (id: string) => void;
+  sourceFilter: string;
+  onSourceFilterChange: (s: string) => void;
+  sources: { name: string; display_name: string }[];
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight text-ink-1">Kanban</h1>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2">
+            <span className="font-semibold text-ink-1">{items.length}</span>
+            <span>items</span>
+            <span aria-hidden className="text-ink-3">·</span>
+            <span>{boardName ?? <span className="italic text-ink-3">no board</span>}</span>
+            <span aria-hidden className="text-ink-3">·</span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className={liveOk ? 'live-dot' : 'h-1.5 w-1.5 rounded-full bg-ink-4'} aria-hidden />
+              <span>{liveOk ? 'live' : 'rest snapshot'}</span>
+            </span>
           </p>
-          <ul className="mt-2 space-y-2">
-            {visibleItems
-              .filter((i) => boardKinds && !boardKinds.includes(i.kind))
-              .map((item) => (
-                <li key={item.id} className="card px-3 py-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-                      {item.kind}
-                    </span>
-                    <span className="font-medium">{item.title}</span>
-                  </div>
-                </li>
-              ))}
-          </ul>
-        </section>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <BoardPicker boards={boards} activeBoardId={activeBoardId} onChange={onBoardChange} />
+          <SourceFilter value={sourceFilter} onChange={onSourceFilterChange} sources={sources} />
+          <CredentialsGate />
+        </div>
+      </div>
+
+      {liveError ? (
+        <div className="card-inset flex items-start gap-2.5 px-3.5 py-2.5 text-[13px] text-ink-2">
+          <span aria-hidden className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-warning-500" />
+          <span>
+            <span className="font-medium text-ink-1">Live updates unavailable</span> ({liveError.message}). Showing the last REST snapshot.
+          </span>
+        </div>
       ) : null}
     </div>
   );
@@ -267,23 +262,22 @@ function BoardPicker({
 }) {
   if (boards.length === 0) {
     return (
-      <div className="flex items-center gap-2 text-xs text-slate-500">
-        <span>No boards yet. Create one in</span>
-        <a href="/admin/boards" className="text-brand-600 underline">
-          Connectors → Boards
-        </a>
-        <span>to customize columns.</span>
-      </div>
+      <a
+        href="/admin/boards"
+        className="btn-ghost focus-ring text-[13px] text-ink-2"
+      >
+        No boards yet — <span className="text-brand-500 underline">create one</span>
+      </a>
     );
   }
   return (
-    <div className="flex items-center gap-2">
-      <label className="text-sm text-slate-600" htmlFor="board-picker">Board</label>
+    <div className="flex items-center gap-1.5">
+      <label className="sr-only" htmlFor="board-picker">Board</label>
       <select
         id="board-picker"
         value={activeBoardId ?? ''}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+        className="field pr-8 text-[13px]"
       >
         {boards.map((b) => (
           <option key={b.id} value={b.id}>
@@ -291,34 +285,87 @@ function BoardPicker({
           </option>
         ))}
       </select>
-      <a href="/admin/boards" className="text-xs text-brand-600 underline">
+      <a
+        href="/admin/boards"
+        className="btn-ghost focus-ring text-[13px]"
+        title="Manage boards"
+      >
         manage
       </a>
     </div>
   );
 }
 
-function KanbanColumn({ id, label, items }: { id: string; label: string; items: WorkItem[] }) {
+function SourceFilter({
+  value,
+  onChange,
+  sources,
+}: {
+  value: string;
+  onChange: (s: string) => void;
+  sources: { name: string; display_name: string }[];
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="sr-only" htmlFor="source-filter">Source</label>
+      <select
+        id="source-filter"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="field pr-8 text-[13px]"
+      >
+        <option value="">All sources</option>
+        {sources.map((s) => (
+          <option key={s.name} value={s.name}>
+            {s.display_name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Kanban — columns with the status-hued header, glassy cards, drag motion.  */
+
+function KanbanColumn({
+  id,
+  label,
+  kind,
+  items,
+}: {
+  id: string;
+  label: string;
+  kind: StatusKind;
+  items: WorkItem[];
+}) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div
       ref={setNodeRef}
-      className={`rounded-lg border bg-slate-50/60 p-3 transition-colors ${
-        isOver ? 'border-brand-500 bg-brand-50' : 'border-slate-200'
+      className={`flex h-full min-h-[280px] flex-col rounded-2xl border bg-bg-surface/60 backdrop-blur-sm transition-all duration-200 ease-spring ${
+        isOver
+          ? 'border-brand-500/60 bg-brand-500/5 shadow-glow'
+          : 'border-border-subtle'
       }`}
     >
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold tracking-tight text-slate-700">{label}</h2>
-        <span className="rounded bg-white px-1.5 py-0.5 text-xs text-slate-500">{items.length}</span>
+      <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3.5 py-2.5">
+        <div className="flex items-center gap-2">
+          <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full bg-status-${kind}-500`} />
+          <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-2">{label}</h2>
+        </div>
+        <span className="rounded-md border border-border-subtle bg-bg-sunken px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-ink-2">
+          {items.length}
+        </span>
       </div>
-      <div className="space-y-2">
+      <div className="flex-1 space-y-2 p-2.5">
         {items.map((item) => (
           <KanbanCard key={item.id} item={item} />
         ))}
         {items.length === 0 ? (
-          <p className="rounded border border-dashed border-slate-200 px-2 py-3 text-center text-xs text-slate-400">
+          <div className="rounded-lg border border-dashed border-border-subtle px-2.5 py-6 text-center text-[11px] uppercase tracking-wider text-ink-3">
             empty
-          </p>
+          </div>
         ) : null}
       </div>
     </div>
@@ -327,76 +374,190 @@ function KanbanColumn({ id, label, items }: { id: string; label: string; items: 
 
 function KanbanCard({ item }: { item: WorkItem }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id });
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+  const style: React.CSSProperties | undefined = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0) rotate(${transform.x * 0.04}deg)`, zIndex: 50 }
     : undefined;
+  const kind = statusToPillKind(item.status);
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...listeners}
       {...attributes}
-      className={`card cursor-grab px-3 py-2 text-sm shadow-sm transition-shadow ${
-        isDragging ? 'opacity-60 shadow-lg' : 'hover:shadow-md'
+      className={`group relative cursor-grab rounded-xl border border-border-subtle bg-bg-surface p-3 shadow-card transition-shadow duration-150 ease-out-quint hover:border-border-default hover:shadow-card-lg ${
+        isDragging ? 'opacity-90 shadow-card-lg' : ''
       }`}
     >
-      <div className="flex items-center gap-2">
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+      {/* status accent stripe */}
+      <span aria-hidden className={`absolute inset-y-2 left-0 w-0.5 rounded-full bg-status-${kind}-500/80`} />
+      <div className="flex items-center gap-1.5">
+        <Pill kind="backlog" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
           {item.kind}
-        </span>
-        {item.priority ? (
-          <span className={`rounded px-1.5 py-0.5 text-xs ${priorityColor(item.priority)}`}>
+        </Pill>
+        {item.priority && item.priority !== 'low' ? (
+          <Pill kind={priorityKind(item.priority)} dot={false} className="!ring-status-blocked-500/30">
             {item.priority}
-          </span>
+          </Pill>
         ) : null}
       </div>
-      <p className="mt-1 font-medium leading-tight text-slate-900">{item.title}</p>
+      <p className="mt-1.5 line-clamp-2 text-[13.5px] font-medium leading-snug text-ink-1">{item.title}</p>
       {item.due_at ? (
-        <p className="mt-1 text-xs text-slate-500">due {formatDate(item.due_at)}</p>
+        <p className="mt-1 text-[11px] text-ink-3">due {formatDate(item.due_at)}</p>
       ) : null}
-      {item.enrichment_state ? (
-        <EnrichmentChip state={item.enrichment_state} />
-      ) : null}
+      {item.enrichment_state ? <EnrichmentChip state={item.enrichment_state} /> : null}
     </div>
   );
+}
+
+function priorityKind(p: string): StatusKind {
+  if (p === 'high' || p === 'critical') return 'blocked';
+  if (p === 'medium') return 'progress';
+  return 'backlog';
 }
 
 function EnrichmentChip({ state }: { state: NonNullable<WorkItem['enrichment_state']> }) {
   const grill = state.grill?.status;
   const wayfind = state.wayfind?.status;
   return (
-    <div className="mt-2 flex gap-1 text-[10px]">
-      <span className={chipColor(grill)}>grill: {grill ?? '—'}</span>
-      <span className={chipColor(wayfind)}>wayfind: {wayfind ?? '—'}</span>
+    <div className="mt-2 flex gap-1.5 text-[10px] font-medium uppercase tracking-wider">
+      <EnrichmentDot label="grill"    status={grill} />
+      <EnrichmentDot label="wayfind"  status={wayfind} />
     </div>
   );
 }
 
-function chipColor(status: string | undefined): string {
-  switch (status) {
-    case 'complete':
-      return 'rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-700';
-    case 'in_progress':
-      return 'rounded bg-amber-50 px-1.5 py-0.5 text-amber-700';
-    case 'failed':
-      return 'rounded bg-rose-50 px-1.5 py-0.5 text-rose-700';
-    default:
-      return 'rounded bg-slate-100 px-1.5 py-0.5 text-slate-500';
-  }
+function EnrichmentDot({ label, status }: { label: string; status: string | undefined }) {
+  const tone =
+    status === 'complete'   ? 'bg-status-done-500/20 text-status-done-600 ring-status-done-500/40' :
+    status === 'in_progress' ? 'bg-status-progress-500/20 text-status-progress-600 ring-status-progress-500/40' :
+    status === 'failed'     ? 'bg-status-blocked-500/20 text-status-blocked-600 ring-status-blocked-500/40' :
+    'bg-bg-sunken text-ink-3 ring-border-subtle';
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ring-1 ring-inset ${tone}`}>
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${
+        status === 'complete' ? 'bg-status-done-500' :
+        status === 'in_progress' ? 'bg-status-progress-500' :
+        status === 'failed' ? 'bg-status-blocked-500' : 'bg-ink-3'
+      }`} />
+      {label}: {status ?? '—'}
+    </span>
+  );
 }
 
-function priorityColor(p: string): string {
-  switch (p) {
-    case 'high':
-      return 'bg-rose-50 text-rose-700';
-    case 'medium':
-      return 'bg-amber-50 text-amber-700';
-    case 'low':
-      return 'bg-slate-100 text-slate-600';
-    default:
-      return 'bg-slate-100 text-slate-600';
-  }
+/* -------------------------------------------------------------------------- */
+/* Unbucketed + hidden-by-kind sections.                                       */
+
+function UnbucketedSection({
+  items,
+  boardColumns,
+}: {
+  items: WorkItem[];
+  boardColumns: { id: string; label: string; statuses: string[] }[];
+}) {
+  const orphans = items.filter((i) => !boardColumns.some((c) => c.statuses.includes(i.status)));
+  if (orphans.length === 0) return null;
+  return (
+    <section className="space-y-2.5">
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-2">Unbucketed</h2>
+        <span className="rounded-md border border-border-subtle bg-bg-sunken px-1.5 py-0.5 text-[11px] tabular-nums text-ink-3">
+          {orphans.length}
+        </span>
+      </div>
+      <p className="text-[12px] text-ink-3">
+        These items have a status no current board column captures. Add the status to a column or switch boards.
+      </p>
+      <ul className="space-y-1.5">
+        {orphans.map((item) => (
+          <li key={item.id} className="card flex items-center gap-2 px-3 py-2 text-[13px]">
+            <Pill kind="backlog" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
+              {item.kind}
+            </Pill>
+            <Pill kind={statusToPillKind(item.status)}>{item.status}</Pill>
+            <span className="truncate text-ink-1">{item.title}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
+
+function HiddenByKindSection({
+  items,
+  boardKinds,
+  activeBoardName,
+}: {
+  items: WorkItem[];
+  boardKinds: WorkItemKind[] | null;
+  activeBoardName: string | null;
+}) {
+  if (!boardKinds || boardKinds.length === 0) return null;
+  const hidden = items.filter((i) => !boardKinds.includes(i.kind));
+  if (hidden.length === 0) return null;
+  return (
+    <section className="space-y-2.5">
+      <div className="flex items-baseline gap-3">
+        <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-2">Hidden by board kind filter</h2>
+        <span className="rounded-md border border-border-subtle bg-bg-sunken px-1.5 py-0.5 text-[11px] tabular-nums text-ink-3">
+          {hidden.length}
+        </span>
+      </div>
+      <p className="text-[12px] text-ink-3">
+        Board <code className="rounded bg-bg-sunken px-1.5 py-0.5 text-ink-1">{activeBoardName}</code> restricts to kinds: {boardKinds.join(', ')}.
+      </p>
+      <ul className="space-y-1.5">
+        {hidden.map((item) => (
+          <li key={item.id} className="card flex items-center gap-2 px-3 py-2 text-[13px]">
+            <Pill kind="backlog" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
+              {item.kind}
+            </Pill>
+            <span className="truncate text-ink-1">{item.title}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* First-run auth gate — prompts for API base + admin token if missing.       */
+
+function CredentialsGate() {
+  const [hasCreds, setHasCreds] = useState<boolean | null>(null);
+  const refresh = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const { apiBase, token } = getCredentials();
+    setHasCreds(Boolean(apiBase && token));
+  }, []);
+  useEffect(() => {
+    refresh();
+    if (typeof window === 'undefined') return;
+    window.addEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
+    return () => window.removeEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
+  }, [refresh]);
+  if (hasCreds === false) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          const apiBase = window.prompt('WorkTracker API base URL', window.location.origin) ?? '';
+          const token = window.prompt('Admin token') ?? '';
+          if (apiBase && token) {
+            setApiCredentials(apiBase, token);
+            window.location.reload();
+          }
+        }}
+        className="btn-primary focus-ring"
+      >
+        Sign in
+      </button>
+    );
+  }
+  return null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Helpers — kept from the original page.                                     */
 
 function formatDate(s: string): string {
   try {
@@ -408,8 +569,6 @@ function formatDate(s: string): string {
 
 function isValidTransition(from: WorkItemStatus, to: WorkItemStatus, _kind: WorkItem['kind']): boolean {
   if (from === to) return false;
-  // The brain will reject illegal transitions, but we keep
-  // the UI honest by only allowing the columns we render.
   const allowed: Record<WorkItemStatus, WorkItemStatus[]> = {
     open: ['ready', 'in_progress', 'blocked', 'done', 'cancelled'],
     ready: ['open', 'in_progress', 'blocked', 'done', 'cancelled'],
@@ -432,55 +591,7 @@ function isValidTransition(from: WorkItemStatus, to: WorkItemStatus, _kind: Work
     merged: ['closed'],
     closed: ['pending'],
   } as Record<WorkItemStatus, WorkItemStatus[]>;
-  // The legacy key above is just to satisfy the type checker for
-  // stringly-typed arrays.
   void (allowed as Record<string, WorkItemStatus[]>).in_progress_legacy;
   const target = allowed[to];
   return Array.isArray(target) ? (target as WorkItemStatus[]).includes(from) : false;
-}
-
-function CredentialsGate() {
-  // First-run experience: prompt for API base + admin token if
-  // missing. Stored in localStorage thereafter. Re-checks when
-  // the URL-hash bootstrap writes to localStorage after first
-  // render.
-  const [hasCreds, setHasCreds] = useState<boolean | null>(null);
-  const refresh = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    const { apiBase, token } = getCredentials();
-    setHasCreds(Boolean(apiBase && token));
-  }, []);
-  useEffect(() => {
-    refresh();
-    if (typeof window === 'undefined') return;
-    window.addEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
-    return () => window.removeEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
-  }, [refresh]);
-  if (hasCreds === false) {
-    return (
-      <div className="space-y-3">
-        <button
-          type="button"
-          onClick={() => {
-            const apiBase = window.prompt('WorkTracker API base URL', window.location.origin) ?? '';
-            const token = window.prompt('Admin token') ?? '';
-            if (apiBase && token) {
-              setApiCredentials(apiBase, token);
-              window.location.reload();
-            }
-          }}
-          className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-        >
-          Sign in
-        </button>
-        <p className="max-w-md text-xs text-slate-500">
-          Or open this URL with{' '}
-          <code className="rounded bg-slate-100 px-1 py-0.5">#apiBase=…&amp;token=…</code>{' '}
-          in the hash to sign in automatically — the hash is stripped from the URL
-          before the page renders.
-        </p>
-      </div>
-    );
-  }
-  return null;
 }

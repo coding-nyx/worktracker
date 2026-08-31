@@ -4,6 +4,9 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Board, BoardColumn, WorkItemKind } from '@worktracker/types';
 import { api } from '../../../lib/api';
+import { Modal } from '../../../components/Modal';
+import { EmptyState } from '../../../components/EmptyState';
+import { Pill } from '../../../components/Pill';
 
 const KINDS: WorkItemKind[] = ['task', 'ticket', 'decision', 'review'];
 
@@ -41,73 +44,76 @@ export default function BoardsAdminPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Boards</h1>
-          <p className="text-sm text-slate-500">
-            Saved kanban views. Each board pins a list of columns (label + statuses) and an optional kind filter.
-            The default board is the first thing every user sees on the kanban.
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div className="space-y-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">multi-board</p>
+          <h1 className="text-2xl font-bold tracking-tight text-ink-1">Boards</h1>
+          <p className="max-w-2xl text-[13px] text-ink-2">
+            Saved kanban views. Each board pins a list of columns (label + statuses) and an optional
+            kind filter. The default board is the first thing every user sees on the kanban.
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => refetch()}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm"
-          >
+          <button type="button" onClick={() => refetch()} className="btn-secondary focus-ring">
             Refresh
           </button>
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-          >
+          <button type="button" onClick={() => setCreating(true)} className="btn-primary focus-ring">
             New board
           </button>
         </div>
       </header>
 
-      {isLoading ? <p className="text-sm text-slate-500">Loading…</p> : null}
-      {error ? <p className="text-sm text-rose-600">Failed to load boards.</p> : null}
+      {isLoading ? (
+        <ul className="grid gap-4 md:grid-cols-2">
+          {[0, 1].map((i) => (
+            <li key={i} className="skeleton h-32" />
+          ))}
+        </ul>
+      ) : null}
+      {error ? <p className="text-[13px] text-status-blocked-600">Failed to load boards.</p> : null}
 
       {!isLoading && boards.length === 0 ? (
-        <div className="card p-6 text-center text-sm text-slate-500">
-          <p>No boards yet.</p>
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="mt-3 rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-          >
-            Create the first one
-          </button>
-        </div>
+        <EmptyState
+          title="No boards yet"
+          body="Create the first board and every user will see it as the default landing view."
+          action={
+            <button type="button" onClick={() => setCreating(true)} className="btn-primary focus-ring">
+              Create the first one
+            </button>
+          }
+        />
       ) : null}
 
-      <ul className="space-y-3">
+      <ul className="grid gap-4 md:grid-cols-2">
         {boards.map((b) => (
-          <li key={b.id} className="card p-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-semibold">
-                  {b.name}
+          <li
+            key={b.id}
+            className="card group relative overflow-hidden p-5 transition-all duration-200 ease-out-quint hover:border-border-default hover:shadow-card-lg"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <h3 className="truncate text-[15px] font-semibold tracking-tight text-ink-1">
+                    {b.name}
+                  </h3>
                   {b.is_default ? (
-                    <span className="ml-2 rounded bg-brand-100 px-1.5 py-0.5 text-xs text-brand-700">default</span>
+                    <Pill kind="ready" dot={false} className="!ring-status-ready-500/40 !bg-status-ready-500/10 !text-status-ready-600">
+                      <span aria-hidden>★</span>
+                      <span>default</span>
+                    </Pill>
                   ) : null}
-                </p>
+                </div>
                 {b.description ? (
-                  <p className="mt-1 text-sm text-slate-600">{b.description}</p>
+                  <p className="text-[12.5px] leading-5 text-ink-2">{b.description}</p>
                 ) : null}
-                <p className="mt-1 text-xs text-slate-400">
-                  {b.columns.length} columns
-                  {b.kinds ? ` · kinds: ${b.kinds.join(', ')}` : ' · all kinds'}
+                <p className="text-[11px] uppercase tracking-wider text-ink-3">
+                  {b.columns.length} column{b.columns.length === 1 ? '' : 's'}
+                  <span className="px-1 text-ink-4">·</span>
+                  {b.kinds && b.kinds.length > 0 ? `kinds: ${b.kinds.join(', ')}` : 'all kinds'}
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setEditing(b)}
-                  className="rounded border border-slate-300 px-3 py-1.5 text-sm"
-                >
+              <div className="flex shrink-0 gap-2 opacity-60 transition-opacity group-hover:opacity-100">
+                <button type="button" onClick={() => setEditing(b)} className="btn-secondary focus-ring">
                   Edit
                 </button>
                 <button
@@ -117,20 +123,20 @@ export default function BoardsAdminPage() {
                   }}
                   disabled={b.is_default || deleteBoard.isPending}
                   title={b.is_default ? 'Unset default before deleting' : undefined}
-                  className="rounded border border-rose-300 px-3 py-1.5 text-sm text-rose-700 disabled:opacity-50"
+                  className="btn-danger focus-ring"
                 >
                   Delete
                 </button>
               </div>
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-4 flex flex-wrap gap-1.5">
               {b.columns.map((c) => (
                 <span
                   key={c.id}
-                  className="rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border-subtle bg-bg-sunken px-2 py-0.5 text-[11px]"
                 >
-                  <span className="font-medium">{c.label}</span>
-                  <span className="ml-1 text-slate-500">({c.statuses.join(', ')})</span>
+                  <span className="font-medium text-ink-1">{c.label}</span>
+                  <span className="text-ink-3">({c.statuses.join(', ')})</span>
                 </span>
               ))}
             </div>
@@ -216,130 +222,14 @@ function BoardEditor({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-      <div className="card w-full max-w-2xl p-6" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold">{initial.id ? 'Edit board' : 'New board'}</h2>
-        <div className="mt-3 space-y-3">
-          <label className="block">
-            <span className="text-sm text-slate-700">Name</span>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm text-slate-700">Description</span>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={2}
-              className="mt-1 block w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-            />
-          </label>
-          <fieldset>
-            <legend className="text-sm text-slate-700">Kinds (empty = all)</legend>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {KINDS.map((k) => (
-                <label key={k} className="flex items-center gap-1 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={kinds.includes(k)}
-                    onChange={(e) =>
-                      setKinds(e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k))
-                    }
-                  />
-                  {k}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={isDefault}
-              onChange={(e) => setIsDefault(e.target.checked)}
-            />
-            Default board
-          </label>
-
-          <fieldset>
-            <legend className="text-sm text-slate-700">Columns</legend>
-            <div className="mt-1 space-y-2">
-              {columns.map((c, idx) => (
-                <div key={c.id} className="rounded border border-slate-200 p-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      value={c.id}
-                      onChange={(e) => updateColumn(idx, { id: e.target.value })}
-                      placeholder="column id"
-                      className="rounded border border-slate-300 px-2 py-1 text-xs"
-                    />
-                    <input
-                      value={c.label}
-                      onChange={(e) => updateColumn(idx, { label: e.target.value })}
-                      placeholder="label"
-                      className="rounded border border-slate-300 px-2 py-1 text-xs"
-                    />
-                  </div>
-                  <input
-                    value={c.statuses.join(',')}
-                    onChange={(e) =>
-                      updateColumn(idx, {
-                        statuses: e.target.value
-                          .split(',')
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      })
-                    }
-                    placeholder="statuses (comma-separated)"
-                    className="mt-2 block w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                  />
-                  <div className="mt-2 flex justify-end gap-1">
-                    <button
-                      type="button"
-                      onClick={() => moveColumn(idx, -1)}
-                      disabled={idx === 0}
-                      className="rounded border border-slate-300 px-2 py-0.5 text-xs"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveColumn(idx, 1)}
-                      disabled={idx === columns.length - 1}
-                      className="rounded border border-slate-300 px-2 py-0.5 text-xs"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeColumn(idx)}
-                      className="rounded border border-rose-300 px-2 py-0.5 text-xs text-rose-700"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={addColumn}
-                className="rounded border border-dashed border-slate-300 px-3 py-1.5 text-sm"
-              >
-                + Add column
-              </button>
-            </div>
-          </fieldset>
-
-          {error ? <p className="text-sm text-rose-600">{(error as Error).message}</p> : null}
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded border border-slate-300 px-3 py-1.5 text-sm"
-          >
+    <Modal
+      open
+      onClose={onCancel}
+      title={initial.id ? 'Edit board' : 'New board'}
+      size="lg"
+      footer={
+        <>
+          <button type="button" onClick={onCancel} className="btn-secondary focus-ring">
             Cancel
           </button>
           <button
@@ -354,12 +244,140 @@ function BoardEditor({
               })
             }
             disabled={saving || name.trim().length === 0 || columns.length === 0}
-            className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            className="btn-primary focus-ring"
           >
             {saving ? 'Saving…' : initial.id ? 'Save' : 'Create'}
           </button>
-        </div>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <label className="block">
+          <span className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">Name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="field mt-1.5"
+            placeholder="e.g. Engineering Pipeline"
+          />
+        </label>
+        <label className="block">
+          <span className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">Description</span>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            className="field mt-1.5"
+            placeholder="What is this board for?"
+          />
+        </label>
+        <fieldset>
+          <legend className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">
+            Kinds <span className="font-normal normal-case text-ink-4">(empty = all kinds)</span>
+          </legend>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {KINDS.map((k) => {
+              const checked = kinds.includes(k);
+              return (
+                <label
+                  key={k}
+                  className={`focus-ring inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-[12px] transition-colors ${
+                    checked
+                      ? 'border-brand-500/50 bg-brand-500/10 text-brand-500'
+                      : 'border-border-subtle bg-bg-surface text-ink-2 hover:border-border-default'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) =>
+                      setKinds(e.target.checked ? [...kinds, k] : kinds.filter((x) => x !== k))
+                    }
+                    className="sr-only"
+                  />
+                  {k}
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
+        <label className="flex items-center gap-2 text-[13px] text-ink-1">
+          <input
+            type="checkbox"
+            checked={isDefault}
+            onChange={(e) => setIsDefault(e.target.checked)}
+            className="h-4 w-4 rounded border-border-default bg-bg-surface accent-brand-500"
+          />
+          Set as default board
+        </label>
+
+        <fieldset>
+          <legend className="text-[12px] font-semibold uppercase tracking-wider text-ink-3">Columns</legend>
+          <div className="mt-2 space-y-2">
+            {columns.map((c, idx) => (
+              <div key={c.id} className="card-inset space-y-2 p-3">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <input
+                    value={c.id}
+                    onChange={(e) => updateColumn(idx, { id: e.target.value })}
+                    placeholder="column id"
+                    className="field"
+                  />
+                  <input
+                    value={c.label}
+                    onChange={(e) => updateColumn(idx, { label: e.target.value })}
+                    placeholder="label"
+                    className="field"
+                  />
+                </div>
+                <input
+                  value={c.statuses.join(',')}
+                  onChange={(e) =>
+                    updateColumn(idx, {
+                      statuses: e.target.value
+                        .split(',')
+                        .map((s) => s.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                  placeholder="statuses (comma-separated, e.g. task.in_progress, ticket.in_progress)"
+                  className="field"
+                />
+                <div className="flex justify-end gap-1">
+                  <button
+                    type="button"
+                    onClick={() => moveColumn(idx, -1)}
+                    disabled={idx === 0}
+                    className="btn-ghost focus-ring !px-2 !py-0.5 text-[12px]"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveColumn(idx, 1)}
+                    disabled={idx === columns.length - 1}
+                    className="btn-ghost focus-ring !px-2 !py-0.5 text-[12px]"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeColumn(idx)}
+                    className="btn-ghost focus-ring !px-2 !py-0.5 text-[12px] text-status-blocked-600"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addColumn} className="btn-ghost focus-ring border border-dashed border-border-default w-full">
+              + Add column
+            </button>
+          </div>
+        </fieldset>
+
+        {error ? <p className="text-[13px] text-status-blocked-600">{(error as Error).message}</p> : null}
       </div>
-    </div>
+    </Modal>
   );
 }
