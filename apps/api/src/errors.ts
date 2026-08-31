@@ -1,10 +1,10 @@
 /**
  * WorkTracker error types. Every error has a stable code (the
- * `ErrorCode` enum in ./local-types/index) so callers can branch
+ * `ErrorCode` enum in @worktracker/types) so callers can branch
  * on it without parsing messages.
  */
 
-import type { ErrorCode } from './local-types/index';
+import type { ErrorCode } from '@worktracker/types';
 
 export class WorkTrackerError extends Error {
   readonly code: ErrorCode;

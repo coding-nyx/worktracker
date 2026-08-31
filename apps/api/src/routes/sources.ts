@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { nowIso } from '../ids.js';
 import { getDb } from '../firestore.js';
 import { requireAdmin, requireSource, hashApiKey } from '../auth.js';
-import type { CreateSourceRequest, CreateSourceResponse, SourceManifest, SourceRegistration } from '../local-types/index';
+import type { CreateSourceRequest, CreateSourceResponse, SourceManifest, SourceRegistration } from '@worktracker/types';
 import { randomBytes } from 'node:crypto';
 
 const ManifestSchema = z.object({

@@ -20,7 +20,7 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { SourceRegistration } from './local-types/index';
+import type { SourceRegistration } from '@worktracker/types';
 import { getDb } from './firestore.js';
 import { ForbiddenError, UnauthorizedError } from './errors.js';
 import { loadConfig } from './config.js';

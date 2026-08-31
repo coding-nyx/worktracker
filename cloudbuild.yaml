@@ -1,0 +1,22 @@
+# Cloud Build config for the WorkTracker API on Cloud Run.
+# Triggered by `gcloud run deploy --source .` from the repo root.
+# Cloud Build looks for a `Dockerfile` at the build context root
+# by default; the API's Dockerfile lives at apps/api/Dockerfile
+# (so the build context can be the whole repo and see the npm
+# workspace + the @worktracker/types package), so we point at
+# it explicitly here.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag
+      - $_TAG
+      - --file
+      - apps/api/Dockerfile
+      - .
+images:
+  - "$_TAG"
+options:
+  logging: CLOUD_LOGGING_ONLY
+substitutions:
+  _TAG: "${_REGION}-docker.pkg.dev/${PROJECT_ID}/worktracker-api/worktracker-api:${SHORT_SHA}"

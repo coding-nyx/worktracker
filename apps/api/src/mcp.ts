@@ -15,7 +15,7 @@ import type {
   McpDispatchArgs,
   McpEnrichArgs,
   WorkItem,
-} from './local-types/index';
+} from '@worktracker/types';
 import { z } from 'zod';
 import { ulid, nowIso } from './ids.js';
 import { getDb } from './firestore.js';

@@ -12,7 +12,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ulid, nowIso } from '../ids.js';
 import { getDb } from '../firestore.js';
 import { InvalidInputError, UnauthorizedError } from '../errors.js';
-import type { Command } from '../local-types/index';
+import type { Command } from '@worktracker/types';
 
 const IncomingSchema = z.object({
   event: z.string().min(1),

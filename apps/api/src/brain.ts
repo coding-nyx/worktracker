@@ -22,7 +22,7 @@
  */
 
 import type { Firestore, QueryDocumentSnapshot } from 'firebase-admin/firestore';
-import type { Command } from './local-types/index';
+import type { Command } from '@worktracker/types';
 import { applyCommand, readWorkItem } from './repo.js';
 import { ulid, nowIso } from './ids.js';
 import { WorkTrackerError } from './errors.js';

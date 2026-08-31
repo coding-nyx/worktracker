@@ -23,7 +23,7 @@
 
 import { ulid, nowIso } from '../ids.js';
 import { getDb } from '../firestore.js';
-import type { WorkItem, WorkItemEvent } from '../local-types/index';
+import type { WorkItem, WorkItemEvent } from '@worktracker/types';
 
 export interface HermesConnectorConfig {
   /** Path to the `hermes` CLI on the local box. */

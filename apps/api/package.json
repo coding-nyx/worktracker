@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.5.0",
+    "@worktracker/types": "0.1.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4"
   }

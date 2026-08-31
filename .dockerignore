@@ -1,0 +1,50 @@
+# .dockerignore at the repo root so the Cloud Run / Cloud
+# Functions build context is just the pieces the Dockerfile
+# actually needs (apps/api, packages/types, root package files).
+# Everything else is excluded to keep the upload tiny and the
+# build fast.
+
+# Don't upload the git history.
+.git
+.gitignore
+
+# Don't upload the docs / metadata files.
+*.md
+docs
+scripts
+
+# Don't upload other workspaces — the Dockerfile only needs
+# apps/api and packages/types. Adding the web here would
+# upload .next/, node_modules, the whole lot.
+web
+firebase.json
+firestore.rules
+firestore.rules.dev
+firestore.indexes.json
+firestore-debug.log
+
+# Don't upload the local Firestore emulator state or any
+# emulator data.
+.firebase
+.firebase-cache
+*.log
+
+# Never upload build output, dependencies, secrets, or env.
+**/node_modules
+**/dist
+**/out
+**/build
+**/.next
+**/.turbo
+**/.cache
+.env*
+!.env.example
+!.env.template
+.local-secrets.json
+coverage
+test-results
+.DS_Store
+
+# Apps/api's own .dockerignore (Dockerfile, .dockerignore).
+apps/api/Dockerfile
+apps/api/.dockerignore

@@ -12,7 +12,7 @@ import type {
   EnrichRequest,
   WorkItem,
   WorkItemEvent,
-} from '../local-types/index';
+} from '@worktracker/types';
 import { getDb } from '../firestore.js';
 import { requireSource } from '../auth.js';
 import { InvalidInputError, NotFoundError } from '../errors.js';

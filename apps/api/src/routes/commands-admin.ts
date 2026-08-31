@@ -21,7 +21,7 @@ import { getDb } from '../firestore.js';
 import { requireAdmin } from '../auth.js';
 import { NotFoundError, InvalidInputError } from '../errors.js';
 import { nowIso } from '../ids.js';
-import type { Command, CommandFailure } from '../local-types/index';
+import type { Command, CommandFailure } from '@worktracker/types';
 
 const CommandId = z.string().min(1).max(64);
 

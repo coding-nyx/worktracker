@@ -18,7 +18,7 @@ import type {
   WorkItem,
   WorkItemEvent,
   WorkItemStatus,
-} from './local-types/index';
+} from '@worktracker/types';
 import { ulid, nowIso } from './ids.js';
 import { VersionConflictError, NotFoundError } from './errors.js';
 

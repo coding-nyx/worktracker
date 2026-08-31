@@ -14,7 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { getDb } from '../firestore.js';
 import { requireSource } from '../auth.js';
-import type { Command } from '../local-types/index';
+import type { Command } from '@worktracker/types';
 
 const ListQuerySchema = z.object({
   status: z.enum(['queued', 'evaluating', 'applied', 'rejected', 'failed']).optional(),
