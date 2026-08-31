@@ -119,12 +119,64 @@ replay_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 -X POST \
   "${API_BASE}/api/commands/${dl_id}/replay")
 check "POST /api/commands/:id/replay = 202" test "$replay_code" = "202"
 
+# Cleanup the dead-letter test command directly from Firestore.
+# Replay turned it from failed -> queued, then the brain re-ran
+# it and the replayed command created a work_item. The smoke
+# creates both, so cleanup needs to hit both: delete the
+# work_item (queued as an archive command) and hard-delete the
+# command doc.
+sleep 2  # let the replayed command run through the brain
+smoke_item=$(curl -sS --max-time 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${API_BASE}/api/items?limit=20" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for i in data.get('items', []):
+    if i.get('title') == 'smoke dead-letter' and not i.get('archived_at'):
+        print(i['id']); break")
+if [[ -n "$smoke_item" && -n "$gcloud_token" ]]; then
+  curl -sS -o /dev/null -X DELETE \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    "${API_BASE}/api/items/${smoke_item}" >/dev/null
+  check "cleanup: archive smoke_item $smoke_item" test $? -eq 0
+fi
+if [[ -n "$gcloud_token" ]]; then
+  curl -sS -o /dev/null -X DELETE \
+    -H "Authorization: Bearer $gcloud_token" \
+    "https://firestore.googleapis.com/v1/projects/worktracker-prod-2026/databases/(default)/documents/commands/${dl_id}" >/dev/null
+  check "cleanup: hard-delete command doc $dl_id" test $? -eq 0
+fi
+
 # ---- 4. Web UI ----
 bold "4. Web UI reachable"
 ui_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "${API_BASE}/")
 check "GET / = 200" test "$ui_code" = "200"
 ui_admin_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "${API_BASE}/admin")
 check "GET /admin = 200" test "$ui_admin_code" = "200"
+
+# ---- 5. Cleanup ----
+# Self-clean the work_item the smoke just created so the database
+# doesn't grow on every run. DELETE /api/items/:id is async
+# (queues an archive command the brain processes), so we just
+# issue it and don't wait.
+bold "5. Cleanup"
+if [[ -n "$title" ]]; then
+  # The title was used as the work_item's title; find it by title.
+  smoke_item=$(curl -sS --max-time 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+    "${API_BASE}/api/items?limit=20" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for i in data.get('items', []):
+    if i.get('title') == '$title' and not i.get('archived_at'):
+        print(i['id']); break")
+  if [[ -n "$smoke_item" ]]; then
+    curl -sS -o /dev/null -X DELETE \
+      -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+      "${API_BASE}/api/items/${smoke_item}" >/dev/null
+    check "cleanup: archive smoke item $smoke_item" test $? -eq 0
+  else
+    yel "  ! smoke item $title not found (already archived?)"
+  fi
+fi
 
 # ---- Summary ----
 echo
