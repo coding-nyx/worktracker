@@ -239,6 +239,7 @@ export const COMMAND_STATUSES = [
   'evaluating',
   'applied',
   'rejected',
+  'failed',
 ] as const;
 export type CommandStatus = (typeof COMMAND_STATUSES)[number];
 
@@ -328,12 +329,55 @@ export type CommandOpByType = {
     item_id: string | null;
     payload: CommandPayloadMap[K];
     status: CommandStatus;
-    error: string | null;
+    /**
+     * Failure payload on a `rejected` or `failed` command. For
+     * `rejected` it's a structured `{ code, message }` from the
+     * brain's invariants check. For `failed` it's whatever the
+     * last unhandled exception produced. `unknown` covers both.
+     */
+    error: unknown;
     applied_event_id: string | null;
     created_at: string;
     applied_at: string | null;
+    /** Number of times the brain has attempted and failed. */
+    failure_count: number;
+    /** When the brain gave up (status = failed). */
+    failed_at: string | null;
+    /** When the operator last reset the command via /replay. */
+    requeued_at: string | null;
   };
 };
+
+/**
+ * One recorded brain failure. Stored at
+ * `commands/{commandId}/failures/{failureId}` so a long stream of
+ * failures doesn't bloat the command document, and so an operator
+ * can see the history of a single misbehaving command.
+ */
+export interface CommandFailure {
+  id: string;
+  command_id: string;
+  attempt: number;
+  /** Short error code, e.g. `validation_error`, `internal_error`. */
+  code: string;
+  message: string;
+  /** Optional stack trace, capped to 4KB. */
+  stack: string | null;
+  occurred_at: string;
+}
+
+/**
+ * Response shape for `GET /api/commands/:id/failures`. The
+ * command-level fields are returned alongside the sub-docs so the
+ * UI doesn't need a second round-trip.
+ */
+export interface CommandFailuresResponse {
+  command_id: string;
+  status: CommandStatus;
+  failure_count: number;
+  failed_at: string | null;
+  failures: CommandFailure[];
+}
 
 export type Command = CommandOpByType[keyof CommandOpByType];
 

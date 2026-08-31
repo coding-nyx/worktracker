@@ -347,7 +347,13 @@ export type CommandOpByType = {
     item_id: string | null;
     payload: CommandPayloadMap[K];
     status: CommandStatus;
-    error: string | null;
+    /**
+     * Failure payload on a `rejected` or `failed` command. For
+     * `rejected` it's a structured `{ code, message }` from the
+     * brain's invariants check. For `failed` it's whatever the
+     * last unhandled exception produced. `unknown` covers both.
+     */
+    error: unknown;
     applied_event_id: string | null;
     created_at: string;
     applied_at: string | null;
@@ -355,6 +361,8 @@ export type CommandOpByType = {
     failure_count: number;
     /** When the brain gave up (status = failed). */
     failed_at: string | null;
+    /** When the operator last reset the command via /replay. */
+    requeued_at: string | null;
   };
 };
 

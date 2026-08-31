@@ -155,6 +155,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -186,6 +187,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -212,6 +214,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -249,6 +252,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -273,6 +277,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -297,6 +302,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);
@@ -321,6 +327,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
       applied_at: null,
       failure_count: 0,
       failed_at: null,
+      requeued_at: null,
     };
     await enqueueCommand(command);
     reply.code(202);

@@ -7,6 +7,8 @@
  */
 
 import type {
+  Command,
+  CommandFailuresResponse,
   CreateSourceRequest,
   CreateSourceResponse,
   EnrichRequest,
@@ -110,4 +112,23 @@ export const api = {
 
   listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/sources'),
   createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/sources', body),
+
+  // Dead-letter admin surface.
+  listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) {
+      if (v !== undefined) params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return request<{ commands: Command[] }>('GET', `/commands${qs ? `?${qs}` : ''}`);
+  },
+  getCommand: (id: string) =>
+    request<{ command: Command | null }>('GET', `/commands/${id}`),
+  listCommandFailures: (id: string) =>
+    request<CommandFailuresResponse>('GET', `/commands/${id}/failures`),
+  replayCommand: (id: string) =>
+    request<{ command_id: string; status: 'queued'; requeued_at: string }>(
+      'POST',
+      `/commands/${id}/replay`,
+    ),
 };
