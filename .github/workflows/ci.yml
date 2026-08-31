@@ -86,3 +86,34 @@ jobs:
             --tag worktracker-api:ci \
             --load \
             .
+
+  # Smoke test the live stack. Runs on push to master only (not
+  # on PRs) so an in-flight feature branch can't accidentally
+  # pollute the production database. The script self-cleans its
+  # own work_items and command docs, so prod stays tidy.
+  #
+  # Requires two secrets to be configured in the repo:
+  #   SMOKE_API_BASE   default https://worktracker-prod-2026.web.app
+  #   SMOKE_ADMIN_TOKEN default worktracker-prod-2026-admin-token
+  #   GCP_SA_KEY       service account with Firestore read+write,
+  #                     only used for the dead-letter admin
+  #                     section (the rest of the script is
+  #                     pure REST against the API).
+  smoke:
+    name: live smoke
+    runs-on: ubuntu-latest
+    needs: [check, build-web, build-api-image]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run end-to-end smoke
+        env:
+          API_BASE: ${{ secrets.SMOKE_API_BASE }}
+          ADMIN_TOKEN: ${{ secrets.SMOKE_ADMIN_TOKEN }}
+          # Decode the base64 service-account key for gcloud.
+          GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          set -e
+          echo "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > /tmp/sa.json
+          gcloud auth activate-service-account --key-file=/tmp/sa.json
+          ./scripts/smoke.sh
