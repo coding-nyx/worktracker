@@ -17,18 +17,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { initializeApp, getApps, applicationDefault } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
-
-const projectId = 'worktracker-test';
+import { getDb } from '../src/firestore.js';
 
 // In the CI runner, the Firestore emulator is already configured
-// via FIRESTORE_EMULATOR_HOST; we just need to point the admin
-// SDK at the right project.
-if (getApps().length === 0) {
-  initializeApp({ credential: applicationDefault(), projectId });
-}
-const db = getFirestore();
+// via FIRESTORE_EMULATOR_HOST; `getDb()` initializes the app
+// and applies the production settings (`ignoreUndefinedProperties`)
+// before any other Firestore method is called. Tests must use
+// the wrapper so settings are applied before the first
+// `collection()` / `doc()` / `set()` call freezes them.
+const db = getDb();
 
 test('create + transition + reject a version conflict', async () => {
   // 1. Submit a create command.
