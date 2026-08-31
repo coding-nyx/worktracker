@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -14,6 +14,7 @@ import {
 } from '@dnd-kit/core';
 import type { WorkItem, WorkItemStatus, TaskStatus, TicketStatus, DecisionStatus, ReviewStatus } from '@worktracker/types';
 import { api, getCredentials, setCredentials as setApiCredentials } from '../lib/api';
+import { CREDENTIALS_BOOTSTRAPPED_EVENT } from './providers';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
 
 const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
@@ -282,29 +283,45 @@ function isValidTransition(from: WorkItemStatus, to: WorkItemStatus, _kind: Work
 
 function CredentialsGate() {
   // First-run experience: prompt for API base + admin token if
-  // missing. Stored in localStorage thereafter.
+  // missing. Stored in localStorage thereafter. Re-checks when
+  // the URL-hash bootstrap writes to localStorage after first
+  // render.
   const [hasCreds, setHasCreds] = useState<boolean | null>(null);
-  useEffect(() => {
+  const refresh = useCallback(() => {
     if (typeof window === 'undefined') return;
     const { apiBase, token } = getCredentials();
     setHasCreds(Boolean(apiBase && token));
   }, []);
+  useEffect(() => {
+    refresh();
+    if (typeof window === 'undefined') return;
+    window.addEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
+    return () => window.removeEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
+  }, [refresh]);
   if (hasCreds === false) {
     return (
-      <button
-        type="button"
-        onClick={() => {
-          const apiBase = window.prompt('WorkTracker API base URL', window.location.origin) ?? '';
-          const token = window.prompt('Admin token') ?? '';
-          if (apiBase && token) {
-            setApiCredentials(apiBase, token);
-            window.location.reload();
-          }
-        }}
-        className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-      >
-        Sign in
-      </button>
+      <div className="space-y-3">
+        <button
+          type="button"
+          onClick={() => {
+            const apiBase = window.prompt('WorkTracker API base URL', window.location.origin) ?? '';
+            const token = window.prompt('Admin token') ?? '';
+            if (apiBase && token) {
+              setApiCredentials(apiBase, token);
+              window.location.reload();
+            }
+          }}
+          className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+        >
+          Sign in
+        </button>
+        <p className="max-w-md text-xs text-slate-500">
+          Or open this URL with{' '}
+          <code className="rounded bg-slate-100 px-1 py-0.5">#apiBase=…&amp;token=…</code>{' '}
+          in the hash to sign in automatically — the hash is stripped from the URL
+          before the page renders.
+        </p>
+      </div>
     );
   }
   return null;
