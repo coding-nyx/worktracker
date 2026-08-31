@@ -88,10 +88,10 @@ export const api = {
       if (v !== undefined && v !== '') params.set(k, String(v));
     }
     const qs = params.toString();
-    return request<ListItemsResponse>('GET', `/items${qs ? `?${qs}` : ''}`);
+    return request<ListItemsResponse>('GET', `/api/items${qs ? `?${qs}` : ''}`);
   },
-  getItem: (id: string) => request<WorkItem>('GET', `/items/${id}`),
-  getItemEvents: (id: string) => request<{ events: WorkItemEvent[] }>('GET', `/items/${id}/events`),
+  getItem: (id: string) => request<WorkItem>('GET', `/api/items/${id}`),
+  getItemEvents: (id: string) => request<{ events: WorkItemEvent[] }>('GET', `/api/items/${id}/events`),
   createItem: (body: {
     kind: WorkItem['kind'];
     title: string;
@@ -100,18 +100,18 @@ export const api = {
     priority?: WorkItem['priority'];
     owner?: string;
     due_at?: string;
-  }) => request<{ command_id: string; status: 'queued' }>('POST', '/items', body),
+  }) => request<{ command_id: string; status: 'queued' }>('POST', '/api/items', body),
   transition: (id: string, body: TransitionRequest) =>
-    request<{ command_id: string; status: 'queued' }>('POST', `/items/${id}/transition`, body),
+    request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/transition`, body),
   comment: (id: string, body: { body: string; expected_version?: number }) =>
-    request<{ command_id: string; status: 'queued' }>('POST', `/items/${id}/comment`, body),
+    request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/comment`, body),
   link: (id: string, body: LinkRequest) =>
-    request<{ command_id: string; status: 'queued' }>('POST', `/items/${id}/link`, body),
+    request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/link`, body),
   enrich: (id: string, body: EnrichRequest) =>
-    request<{ command_id: string; status: 'queued' }>('POST', `/items/${id}/enrich`, body),
+    request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/enrich`, body),
 
-  listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/sources'),
-  createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/sources', body),
+  listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/api/sources'),
+  createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/api/sources', body),
 
   // Dead-letter admin surface.
   listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {
@@ -120,15 +120,15 @@ export const api = {
       if (v !== undefined) params.set(k, String(v));
     }
     const qs = params.toString();
-    return request<{ commands: Command[] }>('GET', `/commands${qs ? `?${qs}` : ''}`);
+    return request<{ commands: Command[] }>('GET', `/api/commands${qs ? `?${qs}` : ''}`);
   },
   getCommand: (id: string) =>
-    request<{ command: Command | null }>('GET', `/commands/${id}`),
+    request<{ command: Command | null }>('GET', `/api/commands/${id}`),
   listCommandFailures: (id: string) =>
-    request<CommandFailuresResponse>('GET', `/commands/${id}/failures`),
+    request<CommandFailuresResponse>('GET', `/api/commands/${id}/failures`),
   replayCommand: (id: string) =>
     request<{ command_id: string; status: 'queued'; requeued_at: string }>(
       'POST',
-      `/commands/${id}/replay`,
+      `/api/commands/${id}/replay`,
     ),
 };
