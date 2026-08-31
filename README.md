@@ -251,30 +251,130 @@ A column's `statuses` is the set of `WorkItem.status` values that bucket into th
 
 ## MCP
 
-The MCP server is at `POST /api/mcp` (JSON-RPC 2.0, same per-source bearer auth as REST). It exposes 15 tools, in three groups:
+The MCP (Model Context Protocol) server lets external clients — Claude Desktop, Cursor, custom agents, anything that speaks JSON-RPC 2.0 — read and write work items and boards through the same surface the web UI uses.
 
-**Work items (10):** `worktracker_list_items`, `worktracker_get_item`, `worktracker_create_item`, `worktracker_update_item`, `worktracker_transition`, `worktracker_comment`, `worktracker_link_items`, `worktracker_set_reminder` (v0.5 stub), `worktracker_enrich`, `worktracker_dispatch`.
+### Endpoint
 
-**Boards (5):** `worktracker_list_boards`, `worktracker_get_board`, `worktracker_create_board` (admin), `worktracker_update_board` (admin), `worktracker_delete_board` (admin; the default board cannot be deleted).
+| Path | Methods | Notes |
+| --- | --- | --- |
+| `POST /mcp` | JSON-RPC 2.0 | Conventional MCP path. Routed by Firebase Hosting rewrite to Cloud Run. |
+| `POST /api/mcp` | JSON-RPC 2.0 | Internal alias; same handler. Use this when calling through `/api/**` rewrites. |
+| `GET /mcp` | (405) | MCP is request/response for now; SSE is wired but no server-push events fire yet. |
 
-Quick example:
+The transport is **HTTP POST + JSON-RPC 2.0**. The server speaks the `2024-11-05` protocol version. Responses are `Content-Type: application/json` for `tools/list` and `Content-Type: text/event-stream` (`data: {…}\n\n` per JSON-RPC result) for `tools/call` so a future SSE transport drops in without a client change.
+
+### Auth
+
+Every request needs a bearer token:
+
+```
+Authorization: Bearer <WORKTRACKER_ADMIN_TOKEN>     # admin (read + write everything)
+Authorization: Bearer <source-specific token>        # read + write under that source
+```
+
+The same `requireSource` preHandler that guards the REST API guards MCP — there's no separate `requireAdmin` at the transport layer; admin status is inferred from the source's `kind` field on the registered `Source` record (or from the well-known admin token, for ad-hoc admin work). The five board tools (`worktracker_list_boards` / `get_board` / `create_board` / `update_board` / `delete_board`) require admin; reads (`list_boards`, `get_board`) are open to any authenticated source.
+
+### Initialize handshake
 
 ```json
-// List tools
-{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
-
-// Create a "Today" board with two columns
-{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-  "params": { "name": "worktracker_create_board",
-    "arguments": {
-      "name": "Today",
-      "columns": [
-        { "id": "doing", "label": "Doing", "statuses": ["in_progress"] },
-        { "id": "done", "label": "Done",  "statuses": ["done", "cancelled"] }
-      ],
-      "is_default": true
-    }}}
+{ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+  "params": { "protocolVersion": "2024-11-05",
+             "capabilities": {},
+             "clientInfo": { "name": "my-agent", "version": "1.0.0" } } }
 ```
+
+Response:
+
+```json
+{ "jsonrpc": "2.0", "id": 1,
+  "result": { "protocolVersion": "2024-11-05",
+             "serverInfo":   { "name": "worktracker", "version": "0.1.0" },
+             "capabilities": { "tools": {} } } }
+```
+
+### Discovery
+
+```json
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }
+```
+
+Returns an array of 15 tool definitions. The full table:
+
+#### Work items (10)
+
+| Tool | Auth | Purpose |
+| --- | --- | --- |
+| `worktracker_list_items` | any | List items, optionally filtered by `kind` / `status` / `source` / `owner` / `q` (search), paginated by `limit` (default 50, max 200). Set `include_archived=true` to include archived items. |
+| `worktracker_get_item` | any | Fetch one item by id, with its full event timeline. |
+| `worktracker_create_item` | any | Queue a `create` command. Returns `{ command_id, status: "queued" }`; the brain materializes the item asynchronously. |
+| `worktracker_update_item` | any | Queue an `update` command with a `patch` of allowed fields and `expected_version` for optimistic concurrency. |
+| `worktracker_transition` | any | Queue a `transition` command to `to_status`. `expected_version` is required. `comment` is optional. `force_dispatch` skips enrichment if true. |
+| `worktracker_comment` | any | Append a comment event to an item's timeline. |
+| `worktracker_link_items` | any | Create a typed relationship: `parent_id` → `child_id` with `kind ∈ {depends_on, blocks, related, mirrors, parent_of}`. |
+| `worktracker_set_reminder` | any | Attach a reminder at `remind_at` to be delivered on `channel` to `target`. v0.5 stub. |
+| `worktracker_enrich` | any | Run Grill or Wayfind on an item. `stage ∈ {grill, wayfind, both}`. v0 stretch. |
+| `worktracker_dispatch` | any | High-level: pre-flight + missing enrichment + transition. `options.force` skips gating checks. Returns a job id. |
+
+#### Boards (5)
+
+| Tool | Auth | Purpose |
+| --- | --- | --- |
+| `worktracker_list_boards` | any | List all boards with full column definitions and the `is_default` flag. |
+| `worktracker_get_board` | any | Fetch one board by id. |
+| `worktracker_create_board` | admin | Create a board. Pass `is_default: true` to make it the landing view (unsets the existing default in the same batch). |
+| `worktracker_update_board` | admin | Update name / description / kinds / columns / `is_default`. Omit a field to keep its current value. |
+| `worktracker_delete_board` | admin | Delete a board. The default board cannot be deleted — set another board as default first. |
+
+### End-to-end example
+
+```bash
+# 1. Initialize.
+curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+  -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+       "params":{"protocolVersion":"2024-11-05","capabilities":{},
+                 "clientInfo":{"name":"docs","version":"1.0"}}}'
+
+# 2. Discover.
+curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+  -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+
+# 3. Create a "Today" board with two columns, as the default.
+curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+  -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+       "params":{"name":"worktracker_create_board",
+                 "arguments":{"name":"Today",
+                              "columns":[
+                                {"id":"doing","label":"Doing","statuses":["in_progress"]},
+                                {"id":"done","label":"Done","statuses":["done","cancelled"]}
+                              ],
+                              "is_default":true}}}'
+```
+
+### Connecting an MCP client
+
+The MCP spec expects servers to live at a stable path, so a generic client just needs the URL and the bearer token. For Claude Desktop, point it at `https://<host>/mcp` with the admin token in the headers. For a custom agent, the `tools/list` payload is the full contract.
+
+### Errors
+
+| Code | Meaning |
+| --- | --- |
+| `-32700` | Parse error (malformed JSON). |
+| `-32600` | Invalid request (missing `jsonrpc: "2.0"`, unknown method). |
+| `-32601` | Method not found. |
+| `-32602` | Invalid params (e.g. `tools/call` with a missing `name`, or `arguments` that fail the tool's JSON-Schema). |
+| `-32603` | Internal error (the brain or Firestore returned an unexpected failure). |
+| HTTP `401` | Missing or invalid bearer token. |
+| HTTP `404` | Request hit a path the service doesn't expose (e.g. you POSTed to `/mcp` on a deployment whose rewrite isn't installed). |
+| HTTP `405` | Wrong method (you `GET`ted a `POST`-only path). |
 
 ## Tests
 
