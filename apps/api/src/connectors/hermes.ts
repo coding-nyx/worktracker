@@ -23,7 +23,7 @@
 
 import { ulid, nowIso } from '../ids.js';
 import { getDb } from '../firestore.js';
-import type { WorkItem, WorkItemEvent } from '@worktracker/types';
+import type { Command, WorkItem, WorkItemEvent } from '@worktracker/types';
 
 export interface HermesConnectorConfig {
   /** Path to the `hermes` CLI on the local box. */
@@ -154,16 +154,16 @@ export class HermesConnector {
   async handleHermesWebhook(payload: HermesWebhookPayload): Promise<void> {
     if (payload.event.startsWith('kanban.task')) {
       const cmdId = ulid();
-      const command = {
+      const command: Command = {
         id: cmdId,
         source: this.cfg.sourceName,
         source_event_id: `${payload.event}:${payload.task_id}:${payload.at}`,
-        op: 'create' as const,
+        op: 'create',
         item_id: null,
         payload: {
-          kind: 'task' as const,
+          kind: 'task',
           title: payload.title ?? `Hermes task ${payload.task_id}`,
-          body: payload.body ?? null,
+          body: payload.body,
           status: mapHermesStatus(payload.status),
           source_id: payload.task_id,
           source_meta: {
@@ -171,11 +171,14 @@ export class HermesConnector {
             mirror_to_hermes: false, // Hermes-originated; don't loop
           },
         },
-        status: 'queued' as const,
+        status: 'queued',
         error: null,
         applied_event_id: null,
         created_at: nowIso(),
         applied_at: null,
+        failure_count: 0,
+        failed_at: null,
+        requeued_at: null,
       };
       await getDb().collection('commands').doc(cmdId).set(command);
     }
