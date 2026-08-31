@@ -277,16 +277,40 @@ const TOOLS = [
 // ----- Router -----
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
+  // MCP routes are registered at BOTH `/api/mcp` (so internal
+  // callers behind the `/api/**` Firebase Hosting rewrite hit
+  // the real handler) and `/mcp` (so external clients using the
+  // conventional MCP path also work — the Firebase Hosting
+  // rewrite `source: "/mcp"` forwards the literal path to Cloud
+  // Run, so the API itself has to expose `/mcp` directly).
+
   // SSE endpoint for clients to receive server-pushed events.
   // For v0 the MCP surface is request/response only; SSE is here
   // so the contract is ready when we add it.
-  app.get('/api/mcp', { preHandler: requireSource }, async (_req, reply) => {
+  const getHandler = async (
+    _req: import('fastify').FastifyRequest,
+    reply: import('fastify').FastifyReply,
+  ) => {
     reply.code(405).send({ error: 'GET /mcp not supported; POST JSON-RPC to /mcp' });
-  });
+  };
+  app.get('/api/mcp', { preHandler: requireSource }, getHandler);
+  app.get('/mcp', { preHandler: requireSource }, getHandler);
 
   // JSON-RPC 2.0 over HTTP (per MCP spec, accepts a single
   // request or a batch).
   app.post('/api/mcp', { preHandler: requireSource }, async (req, reply) => {
+    const body = req.body as JsonRpcRequest | JsonRpcRequest[];
+    const requests = Array.isArray(body) ? body : [body];
+    const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
+    const payload = Array.isArray(body) ? responses : responses[0];
+    reply.send(payload);
+  });
+
+  // Mirror the POST handler at `/mcp` for the same reason as the
+  // GET handler above. The handler body is identical; Fastify
+  // re-runs the preHandler so `requireSource` enforces auth at
+  // either entry point.
+  app.post('/mcp', { preHandler: requireSource }, async (req, reply) => {
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
