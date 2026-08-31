@@ -26,6 +26,13 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
+      - uses: actions/setup-java@v4
+        with:
+          # Firestore emulator requires Java 21+. The default
+          # runner has an older JDK; install Temurin 21.
+          distribution: temurin
+          java-version: '21'
+
       - name: Install workspaces
         run: npm install
 
