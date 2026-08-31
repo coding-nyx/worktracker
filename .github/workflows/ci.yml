@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Same runner for every job — no self-hosted runner required.
+# Cancels in-progress runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Typecheck and unit tests across the monorepo. Catches regressions
+  # before they reach Cloud Run / Cloud Functions / Hosting.
+  check:
+    name: typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install workspaces
+        run: npm install
+
+      - name: Build @worktracker/types
+        # The web and api both depend on the published types, so
+        # build it first so the .d.ts files are present.
+        run: npm run build --workspace=@worktracker/types
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: API tests (Firestore emulator)
+        # The brain test exercises the full command-queue → brain
+        # → work-item pipeline against the Firestore emulator. The
+        # emulator must be running before `npm test` kicks off.
+        run: |
+          npm install --no-save firebase-tools
+          firebase emulators:exec --only firestore \
+            --project worktracker-test \
+            "npm --workspace=@worktracker/api test"
+
+  # Static check that the Next.js web build still produces a
+  # working static export. Catches broken imports / wrong
+  # router config without deploying to Hosting.
+  build-web:
+    name: build web
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm install
+      - run: npm run build --workspace=@worktracker/types
+      - run: npm run build --workspace=@worktracker/web
+
+  # Build the API image so we catch Dockerfile / build-tool issues
+  # before they reach `gcloud run deploy`. The Cloud Build that
+  # `gcloud run deploy --source .` invokes does the same work, but
+  # running it locally in CI gives a faster signal and doesn't
+  # consume Cloud Build minutes.
+  build-api-image:
+    name: build api image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - uses: actions/setup-docker/buildx-action@v3
+      - run: npm install
+      - name: Build Cloud Run container
+        working-directory: apps/api
+        run: |
+          docker buildx build \
+            --tag worktracker-api:ci \
+            --load \
+            .
