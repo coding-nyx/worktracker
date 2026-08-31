@@ -137,6 +137,23 @@ This:
 - Deploys the `api` Cloud Function (the Fastify + MCP app).
 - Deploys the `brain` Cloud Function (the Firestore trigger).
 - Deploys the `web` Next.js app to Firebase Hosting.
+
+### CI secrets (GitHub Actions)
+
+The `live smoke` job in `.github/workflows/ci.yml` runs `scripts/smoke.sh`
+against the live API and web after every push to `master`. It needs three
+repo secrets set under `Settings → Secrets and variables → Actions`:
+
+| Secret | Purpose |
+| --- | --- |
+| `SMOKE_API_BASE` | The canonical host the smoke test should hit (e.g. `https://worktracker-prod-2026.web.app`). |
+| `SMOKE_ADMIN_TOKEN` | The `WORKTRACKER_ADMIN_TOKEN` value, so the script can `POST /api/items` and `POST /api/boards` against the live API. |
+| `GCP_SA_KEY` | A GCP service-account JSON key with the roles `Cloud Run Invoker` and `Firestore User` on the project. Used by `gcloud auth activate-service-account` so the smoke run can do admin-level Firestore cleanup via `gcloud firestore`. |
+
+Until these are set, the `live smoke` job will fail with
+`Could not read json file /tmp/sa.json: Expecting value: line 2 column 1 (char 1)`
+and the run will surface as a red ✗ on master, but the API / web / image
+builds remain green and production is unaffected.
 - Pushes `firestore.rules` and `firestore.indexes.json`.
 
 ## Data model
