@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { setCredentials as setApiCredentials } from '../lib/api';
 
@@ -22,6 +22,19 @@ export const CREDENTIALS_BOOTSTRAPPED_EVENT = 'worktracker:credentials-bootstrap
  * Also doubles as a way to drive the UI from automation: scripts
  * can navigate to the app with the hash set and skip the
  * `window.prompt()`-based sign-in flow entirely.
+ *
+ * Runs SYNCHRONOUSLY at module load time (not in a useEffect).
+ * This matters because pages like the kanban fire their first
+ * `useQuery` for the REST snapshot in their own useEffect; if
+ * we run the bootstrap in the Providers' useEffect too, React
+ * runs child effects before parent effects, so the page's
+ * query fires BEFORE the bootstrap writes to localStorage. The
+ * query then issues a request with no Authorization header, gets
+ * a 401, and TanStack Query caches the failure — never retrying
+ * after the credentials land a microtask later. Running the
+ * bootstrap synchronously at module load means the credentials
+ * are in localStorage before any component renders, so the
+ * first query already has them.
  */
 function bootstrapCredentialsFromHash() {
   if (typeof window === 'undefined') return;
@@ -32,16 +45,18 @@ function bootstrapCredentialsFromHash() {
   const token = params.get('token');
   if (apiBase && token) {
     setApiCredentials(apiBase, token);
-    // Pages may have already rendered with `hasCreds=false`
-    // before the bootstrap wrote to localStorage. Notify them
-    // so they can re-check instead of waiting for a manual
-    // reload.
+    // Notify any pages that already mounted with an empty
+    // `hasCreds` state so they can re-check.
     window.dispatchEvent(new Event(CREDENTIALS_BOOTSTRAPPED_EVENT));
   }
   // Always strip the hash once processed so the token doesn't
   // linger in the URL bar or leak via copy/paste.
   history.replaceState(null, '', window.location.pathname + window.location.search);
 }
+
+// Run synchronously at module load. Safe on the server —
+// the function no-ops when `window` is undefined.
+bootstrapCredentialsFromHash();
 
 export function Providers({ children }: { children: ReactNode }) {
   // Per-mount so SSR and client get separate clients. The
@@ -54,8 +69,5 @@ export function Providers({ children }: { children: ReactNode }) {
         },
       }),
   );
-  useEffect(() => {
-    bootstrapCredentialsFromHash();
-  }, []);
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
