@@ -10,6 +10,7 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
 
 let app: App | null = null;
 let db: Firestore | null = null;
+let settingsApplied = false;
 
 export function getDb(): Firestore {
   if (db) return db;
@@ -36,12 +37,19 @@ export function getDb(): Firestore {
     }
   }
   db = getFirestore(app);
-  // Allow .set() calls to drop undefined fields instead of
-  // rejecting them — every command constructor leaves fields
-  // like `body.source_meta` undefined when not provided, and
-  // serializing those as null would change the on-the-wire
-  // shape of the data model.
-  db.settings({ ignoreUndefinedProperties: true });
+  // Firestore's `settings()` is one-shot per underlying instance —
+  // re-applying it on a re-initialized `db` (e.g. after
+  // `resetDbForTest()`) throws. Guard with a flag so the brain
+  // can still call `getDb()` between tests.
+  if (!settingsApplied) {
+    // Allow .set() calls to drop undefined fields instead of
+    // rejecting them — every command constructor leaves fields
+    // like `body.source_meta` undefined when not provided, and
+    // serializing those as null would change the on-the-wire
+    // shape of the data model.
+    db.settings({ ignoreUndefinedProperties: true });
+    settingsApplied = true;
+  }
   return db;
 }
 
