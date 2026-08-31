@@ -25,6 +25,7 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "cleanUrls": true,
     "rewrites": [
       {
         "source": "/mcp",
@@ -39,6 +40,18 @@
           "serviceId": "worktracker-api",
           "region": "us-central1"
         }
+      },
+      {
+        "source": "/admin/boards",
+        "destination": "/admin/boards.html"
+      },
+      {
+        "source": "/admin",
+        "destination": "/admin.html"
+      },
+      {
+        "source": "/sources",
+        "destination": "/sources.html"
       },
       {
         "source": "**",
