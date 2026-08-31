@@ -7,15 +7,19 @@
  */
 
 import type {
+  Board,
   Command,
   CommandFailuresResponse,
   CreateSourceRequest,
   CreateSourceResponse,
+  CreateBoardRequest,
   EnrichRequest,
   LinkRequest,
   ListItemsResponse,
+  ListBoardsResponse,
   SourceRegistration,
   TransitionRequest,
+  UpdateBoardRequest,
   WorkItem,
   WorkItemEvent,
 } from '@worktracker/types';
@@ -112,6 +116,18 @@ export const api = {
 
   listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/api/sources'),
   createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/api/sources', body),
+
+  // Boards: saved kanban views with named columns and a kind
+  // filter. Read by anyone; create/update/delete are admin-only
+  // (the server returns 403 if a non-admin tries).
+  listBoards: () => request<ListBoardsResponse>('GET', '/api/boards'),
+  getBoard: (id: string) => request<{ board: Board | null }>('GET', `/api/boards/${id}`),
+  createBoard: (body: CreateBoardRequest) =>
+    request<{ board: Board }>('POST', '/api/boards', body),
+  updateBoard: (id: string, body: UpdateBoardRequest) =>
+    request<{ board: Board }>('PATCH', `/api/boards/${id}`, body),
+  deleteBoard: (id: string) =>
+    request<{ id: string; deleted: boolean }>('DELETE', `/api/boards/${id}`),
 
   // Dead-letter admin surface.
   listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {

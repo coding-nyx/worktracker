@@ -32,6 +32,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Boards: readable by anyone with a valid Firebase Auth token
+    // (the web UI uses the REST API for reads, so this only matters
+    // if a future client connects directly). Writes are server-only.
+    match /boards/{boardId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // Commands: server-only (the brain trigger handles them).
     match /commands/{commandId} {
       allow read, write: if false;

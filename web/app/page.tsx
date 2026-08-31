@@ -12,22 +12,41 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import type { WorkItem, WorkItemStatus, TaskStatus, TicketStatus, DecisionStatus, ReviewStatus } from '@worktracker/types';
+import type {
+  Board,
+  BoardColumn,
+  WorkItem,
+  WorkItemStatus,
+  WorkItemKind,
+} from '@worktracker/types';
 import { api, getCredentials, setCredentials as setApiCredentials } from '../lib/api';
 import { CREDENTIALS_BOOTSTRAPPED_EVENT } from './providers';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
 
-const TASK_COLUMNS: { id: TaskStatus; label: string }[] = [
-  { id: 'open', label: 'Open' },
-  { id: 'ready', label: 'Ready' },
-  { id: 'in_progress', label: 'In Progress' },
-  { id: 'blocked', label: 'Blocked' },
-  { id: 'done', label: 'Done' },
+const ACTIVE_BOARD_KEY = 'worktracker.active_board_id';
+
+// Fallback used when no boards are defined yet. Matches the
+// original hard-coded 5-column layout for tasks, so first-run
+// looks the same as v0.
+const FALLBACK_COLUMNS: { id: string; label: string; statuses: string[] }[] = [
+  { id: 'open', label: 'Open', statuses: ['open'] },
+  { id: 'ready', label: 'Ready', statuses: ['ready'] },
+  { id: 'in_progress', label: 'In Progress', statuses: ['in_progress'] },
+  { id: 'blocked', label: 'Blocked', statuses: ['blocked'] },
+  { id: 'done', label: 'Done', statuses: ['done', 'cancelled'] },
 ];
 
 export default function HomePage() {
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<string>('');
+
+  // Active board. Persisted in localStorage; falls back to the
+  // first board (typically is_default=true).
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setActiveBoardId(window.localStorage.getItem(ACTIVE_BOARD_KEY));
+  }, []);
 
   // Live items via Firestore onSnapshot. The hook handles
   // initial fetch, live updates, and cleanup.
@@ -46,8 +65,62 @@ export default function HomePage() {
     queryKey: ['sources'],
     queryFn: () => api.listSources(),
   });
-
   const sources = sourcesData?.sources ?? [];
+
+  // Boards. Picker reads from this list.
+  const { data: boardsData } = useQuery({
+    queryKey: ['boards'],
+    queryFn: () => api.listBoards(),
+  });
+  const boards = boardsData?.boards ?? [];
+
+  // Resolve the active board: explicit id from localStorage,
+  // then the first board with is_default=true, then the first
+  // board at all, then null (which triggers the fallback).
+  const activeBoard: Board | null = useMemo(() => {
+    if (boards.length === 0) return null;
+    if (activeBoardId) {
+      const found = boards.find((b) => b.id === activeBoardId);
+      if (found) return found;
+    }
+    const def = boards.find((b) => b.is_default);
+    if (def) return def;
+    return boards[0] ?? null;
+  }, [boards, activeBoardId]);
+
+  // If the persisted activeBoardId doesn't exist in the new
+  // boards list, clear it so the default takes over.
+  useEffect(() => {
+    if (activeBoardId && boards.length > 0 && !boards.find((b) => b.id === activeBoardId)) {
+      setActiveBoardId(null);
+      if (typeof window !== 'undefined') window.localStorage.removeItem(ACTIVE_BOARD_KEY);
+    }
+  }, [boards, activeBoardId]);
+
+  const onBoardChange = useCallback((id: string) => {
+    setActiveBoardId(id);
+    if (typeof window !== 'undefined') {
+      if (id) window.localStorage.setItem(ACTIVE_BOARD_KEY, id);
+      else window.localStorage.removeItem(ACTIVE_BOARD_KEY);
+    }
+  }, []);
+
+  // Filter items by the board's kind filter (if any), then drop
+  // archived items.
+  const boardKinds: WorkItemKind[] | null = activeBoard?.kinds ?? null;
+  const visibleItems = useMemo(() => {
+    if (!boardKinds || boardKinds.length === 0) return itemsToShow.filter((i) => !i.archived_at);
+    const set = new Set<WorkItemKind>(boardKinds);
+    return itemsToShow.filter((i) => set.has(i.kind) && !i.archived_at);
+  }, [itemsToShow, boardKinds]);
+
+  // Columns: from the active board if present, else the fallback.
+  // The fallback matches v0's hard-coded task columns so the
+  // page is usable on first load.
+  const boardColumns: { id: string; label: string; statuses: string[] }[] = useMemo(() => {
+    if (!activeBoard) return FALLBACK_COLUMNS;
+    return activeBoard.columns.map((c) => ({ id: c.id, label: c.label, statuses: c.statuses }));
+  }, [activeBoard]);
 
   const transition = useMutation({
     mutationFn: async ({ id, to_status, expected_version }: { id: string; to_status: WorkItemStatus; expected_version: number }) =>
@@ -62,12 +135,17 @@ export default function HomePage() {
   function onDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over) return;
-    const item = itemsToShow.find((i) => i.id === active.id);
+    const item = visibleItems.find((i) => i.id === active.id);
     if (!item) return;
-    const toStatus = over.id as WorkItemStatus;
-    if (toStatus === item.status) return;
-    if (!isValidTransition(item.status, toStatus, item.kind)) return;
-    transition.mutate({ id: item.id, to_status: toStatus, expected_version: item.version });
+    // The drop target is the column id. We need to find a valid
+    // status to transition to. Pick the first status in the
+    // column's status list.
+    const col = boardColumns.find((c) => c.id === over.id);
+    if (!col || col.statuses.length === 0) return;
+    const targetStatus = col.statuses[0] as WorkItemStatus;
+    if (targetStatus === item.status) return;
+    if (!isValidTransition(item.status, targetStatus, item.kind)) return;
+    transition.mutate({ id: item.id, to_status: targetStatus, expected_version: item.version });
   }
 
   return (
@@ -76,24 +154,31 @@ export default function HomePage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Kanban</h1>
           <p className="text-sm text-slate-500">
-            {itemsToShow.length} items · live via Firestore
+            {visibleItems.length} items · {activeBoard ? activeBoard.name : 'no board'} · live via Firestore
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm text-slate-600" htmlFor="source-filter">Source</label>
-          <select
-            id="source-filter"
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-sm"
-          >
-            <option value="">All</option>
-            {sources.map((s) => (
-              <option key={s.name} value={s.name}>
-                {s.display_name}
-              </option>
-            ))}
-          </select>
+        <div className="flex flex-wrap items-center gap-3">
+          <BoardPicker
+            boards={boards}
+            activeBoardId={activeBoard?.id ?? null}
+            onChange={onBoardChange}
+          />
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-slate-600" htmlFor="source-filter">Source</label>
+            <select
+              id="source-filter"
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+            >
+              <option value="">All</option>
+              {sources.map((s) => (
+                <option key={s.name} value={s.name}>
+                  {s.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
           <CredentialsGate />
         </div>
       </header>
@@ -105,24 +190,55 @@ export default function HomePage() {
       ) : null}
 
       <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-5">
-          {TASK_COLUMNS.map((col) => (
+        <div className={`grid gap-4 ${boardColumns.length <= 3 ? 'md:grid-cols-3' : 'md:grid-cols-3 lg:grid-cols-5'}`}>
+          {boardColumns.map((col) => (
             <KanbanColumn
               key={col.id}
               id={col.id}
               label={col.label}
-              items={itemsToShow.filter((i) => i.kind === 'task' && i.status === col.id && !i.archived_at)}
+              items={visibleItems.filter((i) => col.statuses.includes(i.status))}
             />
           ))}
         </div>
       </DndContext>
 
-      {itemsToShow.some((i) => i.kind !== 'task') ? (
+      {visibleItems.some((i) => !boardColumns.some((c) => c.statuses.includes(i.status))) ? (
         <section>
-          <h2 className="text-sm font-semibold text-slate-500">Other kinds</h2>
+          <h2 className="text-sm font-semibold text-slate-500">Unbucketed</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Items in this list have a status no current board column captures.
+            Add the status to a column or switch boards to see them.
+          </p>
           <ul className="mt-2 space-y-2">
-            {itemsToShow
-              .filter((i) => i.kind !== 'task')
+            {visibleItems
+              .filter((i) => !boardColumns.some((c) => c.statuses.includes(i.status)))
+              .map((item) => (
+                <li key={item.id} className="card px-3 py-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                      {item.kind}
+                    </span>
+                    <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">
+                      {item.status}
+                    </span>
+                    <span className="font-medium">{item.title}</span>
+                  </div>
+                </li>
+              ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {visibleItems.some((i) => boardKinds && !boardKinds.includes(i.kind)) ? (
+        <section>
+          <h2 className="text-sm font-semibold text-slate-500">Hidden by board kind filter</h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Board <code className="rounded bg-slate-100 px-1 py-0.5">{activeBoard?.name}</code> restricts
+            to kinds: {boardKinds?.join(', ')}. Items of other kinds are listed below.
+          </p>
+          <ul className="mt-2 space-y-2">
+            {visibleItems
+              .filter((i) => boardKinds && !boardKinds.includes(i.kind))
               .map((item) => (
                 <li key={item.id} className="card px-3 py-2 text-sm">
                   <div className="flex items-center gap-2">
@@ -140,7 +256,49 @@ export default function HomePage() {
   );
 }
 
-function KanbanColumn({ id, label, items }: { id: TaskStatus; label: string; items: WorkItem[] }) {
+function BoardPicker({
+  boards,
+  activeBoardId,
+  onChange,
+}: {
+  boards: Board[];
+  activeBoardId: string | null;
+  onChange: (id: string) => void;
+}) {
+  if (boards.length === 0) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <span>No boards yet. Create one in</span>
+        <a href="/admin/boards" className="text-brand-600 underline">
+          Connectors → Boards
+        </a>
+        <span>to customize columns.</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <label className="text-sm text-slate-600" htmlFor="board-picker">Board</label>
+      <select
+        id="board-picker"
+        value={activeBoardId ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+      >
+        {boards.map((b) => (
+          <option key={b.id} value={b.id}>
+            {b.name}{b.is_default ? ' ★' : ''}
+          </option>
+        ))}
+      </select>
+      <a href="/admin/boards" className="text-xs text-brand-600 underline">
+        manage
+      </a>
+    </div>
+  );
+}
+
+function KanbanColumn({ id, label, items }: { id: string; label: string; items: WorkItem[] }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
     <div

@@ -10,6 +10,7 @@
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type {
+  Board,
   Command,
   ListItemsQuery,
   McpDispatchArgs,
@@ -188,6 +189,86 @@ const TOOLS = [
           },
         },
       },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'worktracker_list_boards',
+    description: 'List all kanban boards. Returns the full Board objects (name, columns, kind filter, default flag).',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'worktracker_get_board',
+    description: 'Get one board by id, including its column definitions and kind filter.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'worktracker_create_board',
+    description: 'Create a new board. Admin only. The board becomes available immediately to every user; pass is_default=true to make it the landing view.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', minLength: 1, maxLength: 120 },
+        description: { type: 'string', maxLength: 2000 },
+        kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
+        columns: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              label: { type: 'string' },
+              statuses: { type: 'array', items: { type: 'string' }, minItems: 1 },
+              kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
+            },
+            required: ['id', 'label', 'statuses'],
+          },
+        },
+        is_default: { type: 'boolean' },
+      },
+      required: ['name', 'columns'],
+    },
+  },
+  {
+    name: 'worktracker_update_board',
+    description: 'Update an existing board. Admin only. Omit any field to keep its current value.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', minLength: 1, maxLength: 120 },
+        description: { type: 'string', maxLength: 2000 },
+        kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
+        columns: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              label: { type: 'string' },
+              statuses: { type: 'array', items: { type: 'string' }, minItems: 1 },
+              kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
+            },
+            required: ['id', 'label', 'statuses'],
+          },
+        },
+        is_default: { type: 'boolean' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'worktracker_delete_board',
+    description: 'Delete a board. Admin only. The default board cannot be deleted; set another board as default first.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
       required: ['id'],
     },
   },
@@ -413,7 +494,139 @@ async function handleToolCall(
       }
       return { jsonrpc: '2.0', id: req.id, result: { job_id: jobId, status: 'enriching' } };
     }
+    case 'worktracker_list_boards': {
+      const snap = await getDb().collection('boards').orderBy('name').get();
+      const boards = snap.docs.map((d) => d.data() as Board);
+      return { jsonrpc: '2.0', id: req.id, result: { boards } };
+    }
+    case 'worktracker_get_board': {
+      const id = z.object({ id: z.string() }).parse(args).id;
+      const doc = await getDb().collection('boards').doc(id).get();
+      if (!doc.exists) {
+        return { jsonrpc: '2.0', id: req.id, result: { board: null } };
+      }
+      return { jsonrpc: '2.0', id: req.id, result: { board: doc.data() as Board } };
+    }
+    case 'worktracker_create_board': {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+        return rpcError(req, -32603, 'create_board is admin-only');
+      }
+      const body = z
+        .object({
+          name: z.string().min(1).max(120),
+          description: z.string().max(2000).optional(),
+          kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+          columns: z
+            .array(
+              z.object({
+                id: z.string().min(1).max(64),
+                label: z.string().min(1).max(64),
+                statuses: z.array(z.string().min(1).max(64)).min(1),
+                kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+              }),
+            )
+            .min(1)
+            .max(20),
+          is_default: z.boolean().optional(),
+        })
+        .parse(args);
+      if (body.is_default) {
+        await unsetExistingBoardDefaults();
+      }
+      const now = nowIso();
+      const board: Board = {
+        id: ulid(),
+        name: body.name,
+        ...(body.description ? { description: body.description } : {}),
+        ...(body.kinds ? { kinds: body.kinds } : {}),
+        columns: body.columns,
+        is_default: body.is_default ?? false,
+        created_at: now,
+        updated_at: now,
+      };
+      await getDb().collection('boards').doc(board.id).set(board);
+      return { jsonrpc: '2.0', id: req.id, result: { board } };
+    }
+    case 'worktracker_update_board': {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+        return rpcError(req, -32603, 'update_board is admin-only');
+      }
+      const body = z
+        .object({
+          id: z.string().min(1).max(64),
+          name: z.string().min(1).max(120).optional(),
+          description: z.string().max(2000).optional(),
+          kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+          columns: z
+            .array(
+              z.object({
+                id: z.string().min(1).max(64),
+                label: z.string().min(1).max(64),
+                statuses: z.array(z.string().min(1).max(64)).min(1),
+                kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+              }),
+            )
+            .min(1)
+            .max(20)
+            .optional(),
+          is_default: z.boolean().optional(),
+        })
+        .parse(args);
+      const ref = getDb().collection('boards').doc(body.id);
+      const snap = await ref.get();
+      if (!snap.exists) {
+        return { jsonrpc: '2.0', id: req.id, result: { error: 'not_found' } };
+      }
+      const current = snap.data() as Board;
+      if (body.is_default && !current.is_default) {
+        await unsetExistingBoardDefaults();
+      }
+      const next: Board = {
+        ...current,
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.description !== undefined ? { description: body.description } : {}),
+        ...(body.kinds !== undefined ? { kinds: body.kinds } : {}),
+        ...(body.columns !== undefined ? { columns: body.columns } : {}),
+        ...(body.is_default !== undefined ? { is_default: body.is_default } : {}),
+        updated_at: nowIso(),
+      };
+      await ref.set(next);
+      return { jsonrpc: '2.0', id: req.id, result: { board: next } };
+    }
+    case 'worktracker_delete_board': {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+        return rpcError(req, -32603, 'delete_board is admin-only');
+      }
+      const id = z.object({ id: z.string().min(1).max(64) }).parse(args).id;
+      const ref = getDb().collection('boards').doc(id);
+      const snap = await ref.get();
+      if (!snap.exists) {
+        return { jsonrpc: '2.0', id: req.id, result: { error: 'not_found' } };
+      }
+      const current = snap.data() as Board;
+      if (current.is_default) {
+        return {
+          jsonrpc: '2.0',
+          id: req.id,
+          result: { error: 'cannot_delete_default', message: 'unset is_default first' },
+        };
+      }
+      await ref.delete();
+      return { jsonrpc: '2.0', id: req.id, result: { id, deleted: true } };
+    }
     default:
       return rpcError(req, -32601, `unknown tool: ${name}`);
   }
+}
+
+async function unsetExistingBoardDefaults(): Promise<void> {
+  const snap = await getDb()
+    .collection('boards')
+    .where('is_default', '==', true)
+    .get();
+  const batch = getDb().batch();
+  for (const doc of snap.docs) {
+    batch.update(doc.ref, { is_default: false, updated_at: nowIso() });
+  }
+  if (snap.docs.length > 0) await batch.commit();
 }

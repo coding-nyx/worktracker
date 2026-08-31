@@ -153,12 +153,78 @@ check "GET / = 200" test "$ui_code" = "200"
 ui_admin_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "${API_BASE}/admin")
 check "GET /admin = 200" test "$ui_admin_code" = "200"
 
-# ---- 5. Cleanup ----
+# ---- 5. Boards admin surface ----
+# Creates a transient board, exercises the full CRUD, then
+# cleans itself up. This validates the multi-board feature
+# end-to-end without leaving test data behind.
+bold "5. Boards (multi-board feature)"
+board_name="smoke-board-$(date +%s)"
+board_body=$(cat <<EOF
+{
+  "name": "$board_name",
+  "description": "transient smoke test board",
+  "columns": [
+    {"id": "todo", "label": "To Do", "statuses": ["open"]},
+    {"id": "doing", "label": "Doing", "statuses": ["in_progress"]},
+    {"id": "done", "label": "Done", "statuses": ["done", "cancelled"]}
+  ]
+}
+EOF
+)
+
+# List (read by anyone; may already have boards from prior runs)
+list_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${API_BASE}/api/boards")
+check "GET /api/boards = 200" test "$list_code" = "200"
+
+# Create
+create_resp=$(curl -sS --max-time 10 -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -d "$board_body" \
+  "${API_BASE}/api/boards")
+board_id=$(echo "$create_resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('board',{}).get('id',''))")
+check "POST /api/boards returned board.id" test -n "$board_id"
+
+# Get
+get_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${API_BASE}/api/boards/${board_id}")
+check "GET /api/boards/:id = 200" test "$get_code" = "200"
+
+# Update
+patch_body='{"description":"updated by smoke","columns":[{"id":"todo","label":"To Do","statuses":["open"]},{"id":"doing","label":"Doing","statuses":["in_progress"]},{"id":"done","label":"Done","statuses":["done","cancelled","resolved"]}]}'
+patch_resp=$(curl -sS --max-time 10 -X PATCH \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  -d "$patch_body" \
+  "${API_BASE}/api/boards/${board_id}")
+updated_desc=$(echo "$patch_resp" | python3 -c "import json,sys; print(json.load(sys.stdin).get('board',{}).get('description',''))")
+check "PATCH /api/boards/:id updated description" test "$updated_desc" = "updated by smoke"
+
+# Verify the kanban reads the new column
+list_after=$(curl -sS --max-time 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" "${API_BASE}/api/boards")
+check "GET /api/boards shows the new column ids" bash -c "
+echo '$list_after' | python3 -c \"
+import json, sys
+d = json.load(sys.stdin)
+ids = [c.get('id') for b in d.get('boards', []) for c in b.get('columns', [])]
+sys.exit(0 if 'todo' in ids and 'doing' in ids and 'done' in ids else 1)
+\""
+
+# Delete (cleanup)
+del_code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 -X DELETE \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}" \
+  "${API_BASE}/api/boards/${board_id}")
+check "DELETE /api/boards/:id = 200" test "$del_code" = "200"
+
+# ---- 6. Cleanup ----
 # Self-clean the work_item the smoke just created so the database
 # doesn't grow on every run. DELETE /api/items/:id is async
 # (queues an archive command the brain processes), so we just
 # issue it and don't wait.
-bold "5. Cleanup"
+bold "6. Cleanup"
 if [[ -n "$title" ]]; then
   # The title was used as the work_item's title; find it by title.
   smoke_item=$(curl -sS --max-time 10 -H "Authorization: Bearer ${ADMIN_TOKEN}" \

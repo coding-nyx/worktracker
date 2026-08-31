@@ -145,6 +145,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await commandsRoutes(app);
   const { commandsAdminRoutes } = await import('./routes/commands-admin.js');
   await commandsAdminRoutes(app);
+  const { boardsRoutes } = await import('./routes/boards.js');
+  await boardsRoutes(app);
   const { webhookRoutes } = await import('./routes/webhooks.js');
   await webhookRoutes(app);
   const { mcpRoutes } = await import('./mcp.js');

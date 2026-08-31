@@ -106,6 +106,24 @@ export default function AdminPage() {
 
       {showManifest ? <ManifestHelp onClose={() => setShowManifest(false)} /> : null}
 
+      <section className="card p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold">Boards</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Saved kanban views — columns, kind filter, default flag. Each user picks
+              a board from the picker at the top of the kanban.
+            </p>
+          </div>
+          <a
+            href="/admin/boards"
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm"
+          >
+            Manage boards →
+          </a>
+        </div>
+      </section>
+
       <DeadLetterPanel />
     </div>
   );

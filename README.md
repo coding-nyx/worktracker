@@ -14,6 +14,11 @@ track what you actually have to do.
 - **Single canonical store.** WorkTracker is the source of truth.
   All writes go through the brain; all sources read from the
   same `work_items` collection.
+- **Multi-board kanban.** Boards are saved views — each pins a
+  list of columns (label + status mapping) and an optional kind
+  filter. Users pick a board from the kanban picker; admins CRUD
+  them at `/admin/boards` or via the MCP `worktracker_*_board`
+  tools. The default board is the first thing every user sees.
 - **Dispatch enrichment.** Items moving to "in progress" go through
   a pre-flight check that runs Grill (interrogate gaps) and Wayfind
   (map dependencies + propose solution) via a configured enricher
@@ -21,6 +26,8 @@ track what you actually have to do.
 - **Plugin SDK.** New connectors ship a `manifest.json` and a
   bearer token; the Connector Admin UI registers them.
 - **REST + MCP + webhooks.** Three surfaces; same auth, same brain.
+  MCP exposes 15 tools (items CRUD, transitions, comments, links,
+  enrich, dispatch, and 5 board tools).
 - **Live UI.** Kanban with Firestore `onSnapshot`; the card moves
   on the server and the browser updates the same frame.
 
@@ -180,8 +187,6 @@ webhook subscription alive.
 
 ## Operational runbook
 
-### Firestore quotas (free tier)
-
 - 50K reads/day, 20K writes/day, 1 GiB storage.
 - A single user is well under the limit. A runaway loop in the
   brain could exceed it; the brain has a write-throttle and the
@@ -199,6 +204,60 @@ user pick "ours" / "theirs" / merge.
 `POST /sources/<name>` with `rotate_api_key: true` rotates a
 source's bearer token. The previous token is invalidated
 immediately.
+
+## Boards
+
+A board is a saved kanban view — a list of columns (label + status mapping) and an optional kind filter. Items are not duplicated; the same `work_items` collection powers every board, the columns just bucket items by their `status` field.
+
+```json
+{
+  "id": "01HW...",
+  "name": "Daily",
+  "description": "Tasks for today",
+  "kinds": ["task"],
+  "columns": [
+    { "id": "todo",  "label": "To Do", "statuses": ["open"] },
+    { "id": "doing", "label": "Doing", "statuses": ["in_progress"] },
+    { "id": "done",  "label": "Done",  "statuses": ["done", "cancelled"] }
+  ],
+  "is_default": true
+}
+```
+
+A column's `statuses` is the set of `WorkItem.status` values that bucket into that column. So a single "Done" column can show both task `done` and ticket `resolved` if you put both in its `statuses`. The kanban renders columns top-to-bottom; drag a card from one column to another to transition it (the first status in the destination column is the new state).
+
+**Reading:** every user can `GET /api/boards` and `GET /api/boards/:id`. The kanban reads these on load and stores the active board id in `localStorage['worktracker.active_board_id']`.
+
+**Writing (admin only):** `POST /api/boards`, `PATCH /api/boards/:id`, `DELETE /api/boards/:id`. The web admin page at `/admin/boards` wraps these in a CRUD UI. Default boards (`is_default: true`) cannot be deleted.
+
+**Out of the box:** a fresh deployment has no boards, so the kanban falls back to a 5-column `Open / Ready / In Progress / Blocked / Done` layout (the v0 behavior). Create a board in `/admin/boards` to take control.
+
+## MCP
+
+The MCP server is at `POST /api/mcp` (JSON-RPC 2.0, same per-source bearer auth as REST). It exposes 15 tools, in three groups:
+
+**Work items (10):** `worktracker_list_items`, `worktracker_get_item`, `worktracker_create_item`, `worktracker_update_item`, `worktracker_transition`, `worktracker_comment`, `worktracker_link_items`, `worktracker_set_reminder` (v0.5 stub), `worktracker_enrich`, `worktracker_dispatch`.
+
+**Boards (5):** `worktracker_list_boards`, `worktracker_get_board`, `worktracker_create_board` (admin), `worktracker_update_board` (admin), `worktracker_delete_board` (admin; the default board cannot be deleted).
+
+Quick example:
+
+```json
+// List tools
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }
+
+// Create a "Today" board with two columns
+{ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+  "params": { "name": "worktracker_create_board",
+    "arguments": {
+      "name": "Today",
+      "columns": [
+        { "id": "doing", "label": "Doing", "statuses": ["in_progress"] },
+        { "id": "done", "label": "Done",  "statuses": ["done", "cancelled"] }
+      ],
+      "is_default": true
+    }}}
+```
 
 ## Tests
 

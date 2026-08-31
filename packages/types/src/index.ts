@@ -522,3 +522,69 @@ export interface ApiError {
   message: string;
   details?: Record<string, unknown>;
 }
+
+// =====================================================================
+// Boards
+// =====================================================================
+
+/**
+ * A single column on a Board. The kanban renders one column per
+ * entry; `statuses` lists which `WorkItem.status` values land in
+ * the column. `kinds` narrows the column to specific work item
+ * kinds; if empty, the column shows all kinds.
+ */
+export interface BoardColumn {
+  id: string;
+  label: string;
+  /** Statuses (across kinds) that bucket into this column. */
+  statuses: string[];
+  /**
+   * If set, the column only shows items of these kinds. Useful
+   * for boards that mix kinds (e.g. a "Today" board might bucket
+   * tasks into "open" and tickets into "triaged" as the same
+   * actionable column).
+   */
+  kinds?: WorkItemKind[];
+}
+
+/**
+ * A board is a saved view of the kanban. It pins a list of
+ * columns (each with a label and a set of statuses) and an
+ * optional kind filter. A user can switch boards in the UI;
+ * boards are admin-curated but read-by-everyone.
+ */
+export interface Board {
+  id: string;
+  name: string;
+  description?: string;
+  /**
+   * If set, the board only shows items of these kinds. If empty,
+   * the board shows all kinds.
+   */
+  kinds?: WorkItemKind[];
+  columns: BoardColumn[];
+  /** Whether this board is the default landing view. */
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateBoardRequest {
+  name: string;
+  description?: string;
+  kinds?: WorkItemKind[];
+  columns: BoardColumn[];
+  is_default?: boolean;
+}
+
+export interface UpdateBoardRequest {
+  name?: string;
+  description?: string;
+  kinds?: WorkItemKind[];
+  columns?: BoardColumn[];
+  is_default?: boolean;
+}
+
+export interface ListBoardsResponse {
+  boards: Board[];
+}
