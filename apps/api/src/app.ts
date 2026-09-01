@@ -174,6 +174,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await webhookRoutes(app);
   const { mcpRoutes } = await import('./mcp.js');
   await mcpRoutes(app);
+  const { mcpRoutesV2 } = await import('./mcp-v2.js');
+  await mcpRoutesV2(app);
 
   return app;
 }

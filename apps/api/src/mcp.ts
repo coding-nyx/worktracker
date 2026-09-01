@@ -609,20 +609,40 @@ function rpcError(
 }
 
 /**
- * Dispatch a single tool call. Exported so the AI chat
- * route can reuse the same handlers (and therefore the same
- * auth, RBAC, and brain-command-queue integration) without
- * going through HTTP. The AI builds a fake `JsonRpcRequest`
- * envelope and a fake `FastifyRequest` with the user's
- * `auth` set; everything downstream is the same code path
- * as the MCP `/mcp` endpoint.
+ * Internal tool-dispatch result. The two protocol wrappers
+ * (v1 in `handleToolCall`, v2 in `mcp-v2.ts`) translate this
+ * raw shape into the appropriate JSON-RPC envelope. We return
+ * data + status separately so the v2 wrapper can put the same
+ * data into both `content` (text for the model) and
+ * `structuredContent` (machine JSON for the client) without
+ * re-running the tool.
  */
-export async function handleToolCall(
-  req: JsonRpcRequest,
+export interface DispatchResult {
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+  /** JSON-RPC error code; defaults to -32603 (internal error) when the wrapper translates. */
+  code?: number;
+}
+
+/**
+ * Dispatch a single tool call to the worktracker backend. Same
+ * code path used by every consumer (MCP, the AI chat, future
+ * integrations); the per-protocol envelope is added by the
+ * caller.
+ *
+ * Exported so:
+ *   - `handleToolCall` (v1) wraps it in the bare JSON-RPC
+ *     `result: { ... }` shape the AI chat uses
+ *   - `mcp-v2.ts` wraps it in the spec-compliant
+ *     `result: { content: [...], structuredContent: ... }` shape
+ *     for strict MCP SDKs
+ */
+export async function dispatchTool(
   name: string,
   args: Record<string, unknown>,
   httpReq: FastifyRequest,
-): Promise<JsonRpcResponse> {
+): Promise<DispatchResult> {
   const source = httpReq.auth?.source?.name ?? 'web';
   const enqueue = async <Op extends Command['op']>(
     op: Op,
@@ -646,253 +666,266 @@ export async function handleToolCall(
     return command;
   };
 
-  switch (name) {
-    case 'worktracker_list_items': {
-      const query = (args as unknown as ListItemsQuery) ?? {};
-      let ref = getDb().collection('work_items').orderBy('updated_at', 'desc');
-      if (query.kind) ref = ref.where('kind', '==', query.kind);
-      if (query.status) ref = ref.where('status', '==', query.status);
-      if (query.source) ref = ref.where('source', '==', query.source);
-      if (query.owner) ref = ref.where('owner', '==', query.owner);
-      ref = ref.limit(query.limit ?? 50);
-      const snap = await ref.get();
-      const items = snap.docs.map((d) => d.data() as WorkItem);
-      return { jsonrpc: '2.0', id: req.id, result: { items } };
-    }
-    case 'worktracker_get_item': {
-      const id = z.object({ id: z.string() }).parse(args).id;
-      const doc = await getDb().collection('work_items').doc(id).get();
-      if (!doc.exists) return { jsonrpc: '2.0', id: req.id, result: { item: null } };
-      const events = await doc.ref.collection('events').orderBy('created_at', 'asc').get();
-      return {
-        jsonrpc: '2.0',
-        id: req.id,
-        result: { item: doc.data() as WorkItem, events: events.docs.map((d) => d.data()) },
-      };
-    }
-    case 'worktracker_create_item': {
-      const payload = z
-        .object({
-          kind: z.enum(['task', 'ticket', 'decision', 'review']),
-          title: z.string().min(1),
-          body: z.string().optional(),
-          severity: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-          priority: z.enum(['low', 'medium', 'high']).optional(),
-          owner: z.string().optional(),
-          due_at: z.string().optional(),
-          source_id: z.string().optional(),
-          source_meta: z.record(z.unknown()).optional(),
-        })
-        .parse(args);
-      const command = await enqueue('create', null, payload);
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_update_item': {
-      const args_ = z
-        .object({
-          id: z.string(),
-          patch: z.record(z.unknown()),
-          expected_version: z.number(),
-        })
-        .parse(args);
-      const command = await enqueue('update', args_.id, {
-        patch: args_.patch as never,
-        expected_version: args_.expected_version,
-      });
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_transition': {
-      const args_ = z
-        .object({
-          id: z.string(),
-          to_status: z.string(),
-          comment: z.string().optional(),
-          force_dispatch: z.boolean().optional(),
-          expected_version: z.number(),
-        })
-        .parse(args);
-      const command = await enqueue('transition', args_.id, args_ as never);
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_comment': {
-      const args_ = z
-        .object({ id: z.string(), body: z.string(), expected_version: z.number().optional() })
-        .parse(args);
-      const command = await enqueue('comment', args_.id, args_ as never);
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_link_items': {
-      const args_ = z
-        .object({
-          parent_id: z.string(),
-          child_id: z.string(),
-          kind: z.enum(['depends_on', 'blocks', 'related', 'mirrors', 'parent_of']),
-        })
-        .parse(args);
-      const command = await enqueue('link', args_.parent_id, args_ as never);
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_set_reminder': {
-      return { jsonrpc: '2.0', id: req.id, result: { accepted: false, reason: 'v0.5' } };
-    }
-    case 'worktracker_enrich': {
-      const args_ = z
-        .object({ id: z.string(), stage: z.enum(['grill', 'wayfind', 'both']), enricher: z.string().optional() })
-        .parse(args) satisfies McpEnrichArgs;
-      const command = await enqueue('enrich', args_.id, args_ as never);
-      return { jsonrpc: '2.0', id: req.id, result: { command_id: command.id, status: 'queued' } };
-    }
-    case 'worktracker_dispatch': {
-      const args_ = z
-        .object({
-          id: z.string(),
-          options: z
-            .object({
-              force: z.boolean().optional(),
-              enricher: z.string().optional(),
-              stages: z.array(z.enum(['grill', 'wayfind'])).optional(),
-            })
-            .optional(),
-        })
-        .parse(args) satisfies McpDispatchArgs;
-      const target = await getDb().collection('work_items').doc(args_.id).get();
-      if (!target.exists) {
-        return { jsonrpc: '2.0', id: req.id, result: { error: 'not_found' } };
+  const isAdmin =
+    httpReq.auth?.source?.name === 'web' ||
+    httpReq.auth?.kind === 'admin' ||
+    httpReq.auth?.user?.is_admin === true;
+
+  try {
+    switch (name) {
+      case 'worktracker_list_items': {
+        const query = (args as unknown as ListItemsQuery) ?? {};
+        let ref = getDb().collection('work_items').orderBy('updated_at', 'desc');
+        if (query.kind) ref = ref.where('kind', '==', query.kind);
+        if (query.status) ref = ref.where('status', '==', query.status);
+        if (query.source) ref = ref.where('source', '==', query.source);
+        if (query.owner) ref = ref.where('owner', '==', query.owner);
+        ref = ref.limit(query.limit ?? 50);
+        const snap = await ref.get();
+        const items = snap.docs.map((d) => d.data() as WorkItem);
+        return { ok: true, value: { items } };
       }
-      const jobId = ulid();
-      if (args_.options?.stages?.length) {
-        for (const stage of args_.options.stages) {
-          await enqueue('enrich', args_.id, {
-            stage,
-            ...(args_.options.enricher ? { enricher: args_.options.enricher } : {}),
-          });
-        }
-      }
-      return { jsonrpc: '2.0', id: req.id, result: { job_id: jobId, status: 'enriching' } };
-    }
-    case 'worktracker_list_boards': {
-      const snap = await getDb().collection('boards').orderBy('name').get();
-      const boards = snap.docs.map((d) => d.data() as Board);
-      return { jsonrpc: '2.0', id: req.id, result: { boards } };
-    }
-    case 'worktracker_get_board': {
-      const id = z.object({ id: z.string() }).parse(args).id;
-      const doc = await getDb().collection('boards').doc(id).get();
-      if (!doc.exists) {
-        return { jsonrpc: '2.0', id: req.id, result: { board: null } };
-      }
-      return { jsonrpc: '2.0', id: req.id, result: { board: doc.data() as Board } };
-    }
-    case 'worktracker_create_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
-        return rpcError(req, -32603, 'create_board is admin-only');
-      }
-      const body = z
-        .object({
-          name: z.string().min(1).max(120),
-          description: z.string().max(2000).optional(),
-          kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-          columns: z
-            .array(
-              z.object({
-                id: z.string().min(1).max(64),
-                label: z.string().min(1).max(64),
-                statuses: z.array(z.string().min(1).max(64)).min(1),
-                kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-              }),
-            )
-            .min(1)
-            .max(20),
-          is_default: z.boolean().optional(),
-        })
-        .parse(args);
-      if (body.is_default) {
-        await unsetExistingBoardDefaults();
-      }
-      const now = nowIso();
-      const board: Board = {
-        id: ulid(),
-        name: body.name,
-        ...(body.description ? { description: body.description } : {}),
-        ...(body.kinds ? { kinds: body.kinds } : {}),
-        columns: body.columns,
-        is_default: body.is_default ?? false,
-        created_at: now,
-        updated_at: now,
-      };
-      await getDb().collection('boards').doc(board.id).set(board);
-      return { jsonrpc: '2.0', id: req.id, result: { board } };
-    }
-    case 'worktracker_update_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
-        return rpcError(req, -32603, 'update_board is admin-only');
-      }
-      const body = z
-        .object({
-          id: z.string().min(1).max(64),
-          name: z.string().min(1).max(120).optional(),
-          description: z.string().max(2000).optional(),
-          kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-          columns: z
-            .array(
-              z.object({
-                id: z.string().min(1).max(64),
-                label: z.string().min(1).max(64),
-                statuses: z.array(z.string().min(1).max(64)).min(1),
-                kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-              }),
-            )
-            .min(1)
-            .max(20)
-            .optional(),
-          is_default: z.boolean().optional(),
-        })
-        .parse(args);
-      const ref = getDb().collection('boards').doc(body.id);
-      const snap = await ref.get();
-      if (!snap.exists) {
-        return { jsonrpc: '2.0', id: req.id, result: { error: 'not_found' } };
-      }
-      const current = snap.data() as Board;
-      if (body.is_default && !current.is_default) {
-        await unsetExistingBoardDefaults();
-      }
-      const next: Board = {
-        ...current,
-        ...(body.name !== undefined ? { name: body.name } : {}),
-        ...(body.description !== undefined ? { description: body.description } : {}),
-        ...(body.kinds !== undefined ? { kinds: body.kinds } : {}),
-        ...(body.columns !== undefined ? { columns: body.columns } : {}),
-        ...(body.is_default !== undefined ? { is_default: body.is_default } : {}),
-        updated_at: nowIso(),
-      };
-      await ref.set(next);
-      return { jsonrpc: '2.0', id: req.id, result: { board: next } };
-    }
-    case 'worktracker_delete_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
-        return rpcError(req, -32603, 'delete_board is admin-only');
-      }
-      const id = z.object({ id: z.string().min(1).max(64) }).parse(args).id;
-      const ref = getDb().collection('boards').doc(id);
-      const snap = await ref.get();
-      if (!snap.exists) {
-        return { jsonrpc: '2.0', id: req.id, result: { error: 'not_found' } };
-      }
-      const current = snap.data() as Board;
-      if (current.is_default) {
+      case 'worktracker_get_item': {
+        const id = z.object({ id: z.string() }).parse(args).id;
+        const doc = await getDb().collection('work_items').doc(id).get();
+        if (!doc.exists) return { ok: true, value: { item: null } };
+        const events = await doc.ref.collection('events').orderBy('created_at', 'asc').get();
         return {
-          jsonrpc: '2.0',
-          id: req.id,
-          result: { error: 'cannot_delete_default', message: 'unset is_default first' },
+          ok: true,
+          value: { item: doc.data() as WorkItem, events: events.docs.map((d) => d.data()) },
         };
       }
-      await ref.delete();
-      return { jsonrpc: '2.0', id: req.id, result: { id, deleted: true } };
+      case 'worktracker_create_item': {
+        const payload = z
+          .object({
+            kind: z.enum(['task', 'ticket', 'decision', 'review']),
+            title: z.string().min(1),
+            body: z.string().optional(),
+            severity: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+            priority: z.enum(['low', 'medium', 'high']).optional(),
+            owner: z.string().optional(),
+            due_at: z.string().optional(),
+            source_id: z.string().optional(),
+            source_meta: z.record(z.unknown()).optional(),
+          })
+          .parse(args);
+        const command = await enqueue('create', null, payload);
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_update_item': {
+        const args_ = z
+          .object({
+            id: z.string(),
+            patch: z.record(z.unknown()),
+            expected_version: z.number(),
+          })
+          .parse(args);
+        const command = await enqueue('update', args_.id, {
+          patch: args_.patch as never,
+          expected_version: args_.expected_version,
+        });
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_transition': {
+        const args_ = z
+          .object({
+            id: z.string(),
+            to_status: z.string(),
+            comment: z.string().optional(),
+            force_dispatch: z.boolean().optional(),
+            expected_version: z.number(),
+          })
+          .parse(args);
+        const command = await enqueue('transition', args_.id, args_ as never);
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_comment': {
+        const args_ = z
+          .object({ id: z.string(), body: z.string(), expected_version: z.number().optional() })
+          .parse(args);
+        const command = await enqueue('comment', args_.id, args_ as never);
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_link_items': {
+        const args_ = z
+          .object({
+            parent_id: z.string(),
+            child_id: z.string(),
+            kind: z.enum(['depends_on', 'blocks', 'related', 'mirrors', 'parent_of']),
+          })
+          .parse(args);
+        const command = await enqueue('link', args_.parent_id, args_ as never);
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_set_reminder': {
+        return { ok: true, value: { accepted: false, reason: 'v0.5' } };
+      }
+      case 'worktracker_enrich': {
+        const args_ = z
+          .object({ id: z.string(), stage: z.enum(['grill', 'wayfind', 'both']), enricher: z.string().optional() })
+          .parse(args) satisfies McpEnrichArgs;
+        const command = await enqueue('enrich', args_.id, args_ as never);
+        return { ok: true, value: { command_id: command.id, status: 'queued' } };
+      }
+      case 'worktracker_dispatch': {
+        const args_ = z
+          .object({
+            id: z.string(),
+            options: z
+              .object({
+                force: z.boolean().optional(),
+                enricher: z.string().optional(),
+                stages: z.array(z.enum(['grill', 'wayfind'])).optional(),
+              })
+              .optional(),
+          })
+          .parse(args) satisfies McpDispatchArgs;
+        const target = await getDb().collection('work_items').doc(args_.id).get();
+        if (!target.exists) return { ok: true, value: { error: 'not_found' } };
+        const jobId = ulid();
+        if (args_.options?.stages?.length) {
+          for (const stage of args_.options.stages) {
+            await enqueue('enrich', args_.id, {
+              stage,
+              ...(args_.options.enricher ? { enricher: args_.options.enricher } : {}),
+            });
+          }
+        }
+        return { ok: true, value: { job_id: jobId, status: 'enriching' } };
+      }
+      case 'worktracker_list_boards': {
+        const snap = await getDb().collection('boards').orderBy('name').get();
+        const boards = snap.docs.map((d) => d.data() as Board);
+        return { ok: true, value: { boards } };
+      }
+      case 'worktracker_get_board': {
+        const id = z.object({ id: z.string() }).parse(args).id;
+        const doc = await getDb().collection('boards').doc(id).get();
+        if (!doc.exists) return { ok: true, value: { board: null } };
+        return { ok: true, value: { board: doc.data() as Board } };
+      }
+      case 'worktracker_create_board': {
+        if (!isAdmin) return { ok: false, error: 'create_board is admin-only', code: -32603 };
+        const body = z
+          .object({
+            name: z.string().min(1).max(120),
+            description: z.string().max(2000).optional(),
+            kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+            columns: z
+              .array(
+                z.object({
+                  id: z.string().min(1).max(64),
+                  label: z.string().min(1).max(64),
+                  statuses: z.array(z.string().min(1).max(64)).min(1),
+                  kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+                }),
+              )
+              .min(1)
+              .max(20),
+            is_default: z.boolean().optional(),
+          })
+          .parse(args);
+        if (body.is_default) await unsetExistingBoardDefaults();
+        const now = nowIso();
+        const board: Board = {
+          id: ulid(),
+          name: body.name,
+          ...(body.description ? { description: body.description } : {}),
+          ...(body.kinds ? { kinds: body.kinds } : {}),
+          columns: body.columns,
+          is_default: body.is_default ?? false,
+          created_at: now,
+          updated_at: now,
+        };
+        await getDb().collection('boards').doc(board.id).set(board);
+        return { ok: true, value: { board } };
+      }
+      case 'worktracker_update_board': {
+        if (!isAdmin) return { ok: false, error: 'update_board is admin-only', code: -32603 };
+        const body = z
+          .object({
+            id: z.string().min(1).max(64),
+            name: z.string().min(1).max(120).optional(),
+            description: z.string().max(2000).optional(),
+            kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+            columns: z
+              .array(
+                z.object({
+                  id: z.string().min(1).max(64),
+                  label: z.string().min(1).max(64),
+                  statuses: z.array(z.string().min(1).max(64)).min(1),
+                  kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
+                }),
+              )
+              .min(1)
+              .max(20)
+              .optional(),
+            is_default: z.boolean().optional(),
+          })
+          .parse(args);
+        const ref = getDb().collection('boards').doc(body.id);
+        const snap = await ref.get();
+        if (!snap.exists) return { ok: true, value: { error: 'not_found' } };
+        const current = snap.data() as Board;
+        if (body.is_default && !current.is_default) await unsetExistingBoardDefaults();
+        const next: Board = {
+          ...current,
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.description !== undefined ? { description: body.description } : {}),
+          ...(body.kinds !== undefined ? { kinds: body.kinds } : {}),
+          ...(body.columns !== undefined ? { columns: body.columns } : {}),
+          ...(body.is_default !== undefined ? { is_default: body.is_default } : {}),
+          updated_at: nowIso(),
+        };
+        await ref.set(next);
+        return { ok: true, value: { board: next } };
+      }
+      case 'worktracker_delete_board': {
+        if (!isAdmin) return { ok: false, error: 'delete_board is admin-only', code: -32603 };
+        const id = z.object({ id: z.string().min(1).max(64) }).parse(args).id;
+        const ref = getDb().collection('boards').doc(id);
+        const snap = await ref.get();
+        if (!snap.exists) return { ok: true, value: { error: 'not_found' } };
+        const current = snap.data() as Board;
+        if (current.is_default) {
+          return { ok: true, value: { error: 'cannot_delete_default', message: 'unset is_default first' } };
+        }
+        await ref.delete();
+        return { ok: true, value: { id, deleted: true } };
+      }
+      default:
+        return { ok: false, error: `unknown tool: ${name}`, code: -32601 };
     }
-    default:
-      return rpcError(req, -32601, `unknown tool: ${name}`);
+  } catch (err) {
+    // zod validation failures surface here; the protocol
+    // wrappers translate to the appropriate JSON-RPC error
+    // code.
+    return { ok: false, error: (err as Error).message, code: -32602 };
   }
+}
+
+/**
+ * v1 JSON-RPC wrapper around `dispatchTool`. Kept for the
+ * existing AI chat (`/api/ai/chat`) and the legacy `/mcp`
+ * route — returns the bare `result: { ... }` shape that
+ * MiniMax and the existing internal clients parse.
+ *
+ * For MCP-spec-compliant responses (Anthropic, OpenAI,
+ * Hermes SDK validators), use the v2 wrapper in mcp-v2.ts
+ * which adds the required `content` array and an optional
+ * `structuredContent`.
+ */
+export async function handleToolCall(
+  req: JsonRpcRequest,
+  name: string,
+  args: Record<string, unknown>,
+  httpReq: FastifyRequest,
+): Promise<JsonRpcResponse> {
+  const result = await dispatchTool(name, args, httpReq);
+  if (!result.ok) {
+    return rpcError(req, result.code ?? -32603, result.error ?? 'internal error');
+  }
+  return { jsonrpc: '2.0', id: req.id, result: result.value };
 }
 
 async function unsetExistingBoardDefaults(): Promise<void> {

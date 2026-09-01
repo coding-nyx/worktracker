@@ -28,7 +28,7 @@ import { requireSource } from '../auth.js';
 import { AI_TOOLS } from '../ai/tools.js';
 import { chatCompletion, isAiConfigured, type ChatMessage, type ToolCall } from '../ai/client.js';
 import { buildSystemPrompt } from '../ai/prompts.js';
-import { handleToolCall, type JsonRpcRequest } from '../mcp.js';
+import { dispatchTool } from '../mcp.js';
 
 const MAX_TOOL_TURNS = 8; // safety: cap the agent loop
 
@@ -202,11 +202,10 @@ type ToolRunResult =
   | { ok: false; error: string };
 
 /**
- * Dispatch a single tool call locally, with the user's auth.
- * Mirrors the worktracker_create_board / worktracker_* MCP
- * handler dispatch but bypasses the JSON-RPC envelope so the
- * AI gets the raw result object instead of a `{ jsonrpc, result }`
- * wrapper.
+ * Dispatch a single tool call locally with the user's auth.
+ * Calls the shared `dispatchTool` directly (no JSON-RPC envelope
+ * — that wrapping lives in mcp.ts and mcp-v2.ts; the AI uses
+ * the raw result).
  */
 async function runToolLocally(
   name: string,
@@ -214,23 +213,15 @@ async function runToolLocally(
   user: WorktrackerUser,
   _httpReq: FastifyRequest,
 ): Promise<ToolRunResult> {
-  // Build the fake envelope the dispatch expects.
-  const envelope: JsonRpcRequest = {
-    jsonrpc: '2.0',
-    id: `ai-${Date.now()}`,
-    method: 'tools/call',
-    params: { name, arguments: args },
-  };
-  // Build the fake Fastify request with the user's auth. The
-  // dispatch only reads `auth` and `log` from the request, so
-  // the rest can be empty.
+  // The dispatch reads `auth` and `log` from the request; the
+  // rest can be empty. Pass a typed-shaped stub.
   const fakeReq = { auth: { kind: 'user' as const, user }, log: _httpReq.log } as unknown as FastifyRequest;
   try {
-    const res = await handleToolCall(envelope, name, args, fakeReq);
-    if (res.error) {
-      return { ok: false, error: res.error.message };
+    const result = await dispatchTool(name, args, fakeReq);
+    if (result.ok) {
+      return { ok: true, value: result.value };
     }
-    return { ok: true, value: res.result };
+    return { ok: false, error: result.error ?? 'internal error' };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
