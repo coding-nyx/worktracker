@@ -23,6 +23,8 @@ import { useAuth } from '../lib/auth';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
 import { Pill, statusToPillKind, type StatusKind } from '../components/Pill';
 import { EmptyState } from '../components/EmptyState';
+import { NewItemModal } from '../components/NewItemModal';
+import { ItemDetailsPanel } from '../components/ItemDetailsPanel';
 
 const ACTIVE_BOARD_KEY = 'worktracker.active_board_id';
 
@@ -50,6 +52,9 @@ const FALLBACK_COLUMN_KIND: Record<string, StatusKind> = {
 export default function HomePage() {
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [showNewItem, setShowNewItem] = useState(false);
+  const [itemDetailsId, setItemDetailsId] = useState<string | null>(null);
 
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   useEffect(() => {
@@ -111,10 +116,22 @@ export default function HomePage() {
 
   const boardKinds: WorkItemKind[] | null = activeBoard?.kinds ?? null;
   const visibleItems = useMemo(() => {
-    if (!boardKinds || boardKinds.length === 0) return itemsToShow.filter((i) => !i.archived_at);
-    const set = new Set<WorkItemKind>(boardKinds);
-    return itemsToShow.filter((i) => set.has(i.kind) && !i.archived_at);
-  }, [itemsToShow, boardKinds]);
+    let base: WorkItem[];
+    if (!boardKinds || boardKinds.length === 0) {
+      base = itemsToShow.filter((i) => !i.archived_at);
+    } else {
+      const set = new Set<WorkItemKind>(boardKinds);
+      base = itemsToShow.filter((i) => set.has(i.kind) && !i.archived_at);
+    }
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter(
+      (i) =>
+        i.title.toLowerCase().includes(q) ||
+        (i.body ?? '').toLowerCase().includes(q) ||
+        (i.owner ?? '').toLowerCase().includes(q),
+    );
+  }, [itemsToShow, boardKinds, searchQuery]);
 
   const boardColumns: { id: string; label: string; statuses: string[] }[] = useMemo(() => {
     if (!activeBoard) return FALLBACK_COLUMNS;
@@ -158,33 +175,94 @@ export default function HomePage() {
     <div className="space-y-6">
       <PageHeader
         items={visibleItems}
-        boardName={activeBoard?.name ?? null}
-        liveOk={!liveError}
-        liveError={liveErrorObj}
+        totalItems={itemsToShow.filter((i) => !i.archived_at).length}
+        board={activeBoard}
         boards={boards}
         activeBoardId={activeBoard?.id ?? null}
         onBoardChange={onBoardChange}
         sourceFilter={sourceFilter}
         onSourceFilterChange={setSourceFilter}
         sources={sources}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
+        onNewItem={() => setShowNewItem(true)}
+        liveOk={!liveError}
+        liveError={liveErrorObj}
       />
 
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-          {boardColumns.map((col) => (
-            <KanbanColumn
-              key={col.id}
-              id={col.id}
-              label={col.label}
-              kind={columnKind(col.id, col.statuses)}
-              items={visibleItems.filter((i) => col.statuses.includes(i.status))}
-            />
-          ))}
-        </div>
-      </DndContext>
+      {boards.length === 0 ? (
+        <EmptyState
+          title="No boards yet"
+          body="Create your first kanban board to start tracking work. Boards hold columns that group work items by status."
+          action={
+            <a href="/admin/boards" className="btn-primary focus-ring inline-flex items-center gap-2 px-4 py-2 text-[13px] font-medium">
+              Create a board
+            </a>
+          }
+        />
+      ) : (
+        <>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+              {boardColumns.map((col) => (
+                <KanbanColumn
+                  key={col.id}
+                  id={col.id}
+                  label={col.label}
+                  kind={columnKind(col.id, col.statuses)}
+                  items={visibleItems.filter((i) => col.statuses.includes(i.status))}
+                  onCardClick={setItemDetailsId}
+                />
+              ))}
+            </div>
+          </DndContext>
 
-      <UnbucketedSection items={visibleItems} boardColumns={boardColumns} />
-      <HiddenByKindSection items={visibleItems} boardKinds={boardKinds} activeBoardName={activeBoard?.name ?? null} />
+          {visibleItems.length === 0 ? (
+            <EmptyState
+              title={searchQuery ? 'No matches' : 'No items on this board'}
+              body={searchQuery
+                ? `Nothing matches "${searchQuery}". Clear the search or pick a different board.`
+                : 'Click "New item" in the header to add the first one.'}
+              action={
+                searchQuery ? (
+                  <button onClick={() => setSearchQuery('')} className="btn-ghost focus-ring text-[13px]">
+                    Clear search
+                  </button>
+                ) : (
+                  <button onClick={() => setShowNewItem(true)} className="btn-primary focus-ring px-4 py-2 text-[13px] font-medium">
+                    New item
+                  </button>
+                )
+              }
+            />
+          ) : null}
+
+          <UnbucketedSection items={visibleItems} boardColumns={boardColumns} />
+          <HiddenByKindSection items={visibleItems} boardKinds={boardKinds} activeBoardName={activeBoard?.name ?? null} />
+        </>
+      )}
+
+      <NewItemModal
+        open={showNewItem}
+        onClose={() => setShowNewItem(false)}
+        onCreated={() => {
+          // Live subscription will pick up the new item; no manual
+          // invalidation needed unless we're in REST-only mode.
+          if (!process.env.NEXT_PUBLIC_FIREBASE_API_KEY) {
+            queryClient.invalidateQueries({ queryKey: ['items'] });
+          }
+        }}
+      />
+
+      <ItemDetailsPanel
+        itemId={itemDetailsId}
+        onClose={() => setItemDetailsId(null)}
+        onChanged={() => {
+          if (!process.env.NEXT_PUBLIC_FIREBASE_API_KEY) {
+            queryClient.invalidateQueries({ queryKey: ['items'] });
+          }
+        }}
+      />
     </div>
   );
 }
@@ -194,26 +272,34 @@ export default function HomePage() {
 
 function PageHeader({
   items,
-  boardName,
-  liveOk,
-  liveError,
+  totalItems,
+  board,
   boards,
   activeBoardId,
   onBoardChange,
   sourceFilter,
   onSourceFilterChange,
   sources,
+  searchQuery,
+  onSearchQueryChange,
+  onNewItem,
+  liveOk,
+  liveError,
 }: {
   items: WorkItem[];
-  boardName: string | null;
-  liveOk: boolean;
-  liveError: Error | null;
+  totalItems: number;
+  board: Board | null;
   boards: Board[];
   activeBoardId: string | null;
   onBoardChange: (id: string) => void;
   sourceFilter: string;
   onSourceFilterChange: (s: string) => void;
   sources: { name: string; display_name: string }[];
+  searchQuery: string;
+  onSearchQueryChange: (q: string) => void;
+  onNewItem: () => void;
+  liveOk: boolean;
+  liveError: Error | null;
 }) {
   return (
     <div className="space-y-4">
@@ -222,9 +308,17 @@ function PageHeader({
           <h1 className="text-2xl font-bold tracking-tight text-ink-1">Kanban</h1>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-ink-2">
             <span className="font-semibold text-ink-1">{items.length}</span>
+            {searchQuery && items.length !== totalItems ? (
+              <>
+                <span>of</span>
+                <span className="font-semibold text-ink-1">{totalItems}</span>
+              </>
+            ) : null}
             <span>items</span>
             <span aria-hidden className="text-ink-3">·</span>
-            <span>{boardName ?? <span className="italic text-ink-3">no board</span>}</span>
+            <span className="inline-flex items-center gap-1.5">
+              <BoardBadge board={board} />
+            </span>
             <span aria-hidden className="text-ink-3">·</span>
             <span className="inline-flex items-center gap-1.5">
               <span className={liveOk ? 'live-dot' : 'h-1.5 w-1.5 rounded-full bg-ink-4'} aria-hidden />
@@ -233,8 +327,20 @@ function PageHeader({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <SearchInput value={searchQuery} onChange={onSearchQueryChange} />
           <BoardPicker boards={boards} activeBoardId={activeBoardId} onChange={onBoardChange} />
           <SourceFilter value={sourceFilter} onChange={onSourceFilterChange} sources={sources} />
+          <button
+            type="button"
+            onClick={onNewItem}
+            className="btn-primary focus-ring inline-flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-medium"
+            title="New work item (N)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 5v14" /><path d="M5 12h14" />
+            </svg>
+            New item
+          </button>
           <CurrentUser />
         </div>
       </div>
@@ -247,6 +353,40 @@ function PageHeader({
           </span>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function BoardBadge({ board }: { board: Board | null }) {
+  if (!board) return <span className="italic text-ink-3">no board</span>;
+  return (
+    <>
+      <span className="font-medium text-ink-1">{board.name}</span>
+      {board.is_default ? (
+        <span className="rounded border border-border-subtle bg-bg-sunken px-1 text-[10px] font-medium uppercase tracking-wider text-ink-3">default</span>
+      ) : null}
+    </>
+  );
+}
+
+function SearchInput({ value, onChange }: { value: string; onChange: (q: string) => void }) {
+  return (
+    <div className="relative">
+      <label htmlFor="kanban-search" className="sr-only">Search items</label>
+      <span aria-hidden className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-ink-3">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+      </span>
+      <input
+        id="kanban-search"
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search…"
+        className="field pl-8 text-[13px] w-44"
+      />
     </div>
   );
 }
@@ -333,11 +473,13 @@ function KanbanColumn({
   label,
   kind,
   items,
+  onCardClick,
 }: {
   id: string;
   label: string;
   kind: StatusKind;
   items: WorkItem[];
+  onCardClick: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
   return (
@@ -360,7 +502,7 @@ function KanbanColumn({
       </div>
       <div className="flex-1 space-y-2 p-2.5">
         {items.map((item) => (
-          <KanbanCard key={item.id} item={item} />
+          <KanbanCard key={item.id} item={item} onClick={onCardClick} />
         ))}
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border-subtle px-2.5 py-6 text-center text-[11px] uppercase tracking-wider text-ink-3">
@@ -372,7 +514,7 @@ function KanbanColumn({
   );
 }
 
-function KanbanCard({ item }: { item: WorkItem }) {
+function KanbanCard({ item, onClick }: { item: WorkItem; onClick: (id: string) => void }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: item.id });
   const style: React.CSSProperties | undefined = transform
     ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0) rotate(${transform.x * 0.04}deg)`, zIndex: 50 }
@@ -384,7 +526,8 @@ function KanbanCard({ item }: { item: WorkItem }) {
       style={style}
       {...listeners}
       {...attributes}
-      className={`group relative cursor-grab rounded-xl border border-border-subtle bg-bg-surface p-3 shadow-card transition-shadow duration-150 ease-out-quint hover:border-border-default hover:shadow-card-lg ${
+      onClick={() => onClick(item.id)}
+      className={`group relative cursor-pointer rounded-xl border border-border-subtle bg-bg-surface p-3 shadow-card transition-shadow duration-150 ease-out-quint hover:border-border-default hover:shadow-card-lg ${
         isDragging ? 'opacity-90 shadow-card-lg' : ''
       }`}
     >
@@ -399,11 +542,16 @@ function KanbanCard({ item }: { item: WorkItem }) {
             {item.priority}
           </Pill>
         ) : null}
+        {item.archived_at ? (
+          <Pill kind="blocked" dot={false} className="!ring-status-blocked-500/30">archived</Pill>
+        ) : null}
       </div>
       <p className="mt-1.5 line-clamp-2 text-[13.5px] font-medium leading-snug text-ink-1">{item.title}</p>
-      {item.due_at ? (
-        <p className="mt-1 text-[11px] text-ink-3">due {formatDate(item.due_at)}</p>
-      ) : null}
+      <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-3">
+        {item.due_at ? <span>due {formatDate(item.due_at)}</span> : null}
+        {item.due_at && item.owner ? <span aria-hidden>·</span> : null}
+        {item.owner ? <span className="truncate">{item.owner}</span> : null}
+      </div>
       {item.enrichment_state ? <EnrichmentChip state={item.enrichment_state} /> : null}
     </div>
   );

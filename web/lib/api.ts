@@ -117,6 +117,8 @@ export const api = {
   },
   getItem: (id: string) => request<WorkItem>('GET', `/api/items/${id}`),
   getItemEvents: (id: string) => request<{ events: WorkItemEvent[] }>('GET', `/api/items/${id}/events`),
+  updateItem: (body: { id: string; patch: Record<string, unknown>; expected_version: number }) =>
+    request<{ command_id: string; status: 'queued' }>('PATCH', `/api/items/${body.id}`, body),
   createItem: (body: {
     kind: WorkItem['kind'];
     title: string;

@@ -100,12 +100,17 @@ const config: Config = {
           '0%':   { opacity: '0', transform: 'translateY(-8px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
+        'slide-in-right': {
+          '0%':   { opacity: '0', transform: 'translateX(24px)' },
+          '100%': { opacity: '1', transform: 'translateX(0)' },
+        },
       },
       animation: {
         shimmer:    'shimmer 1.6s linear infinite',
         'pulse-ring': 'pulse-ring 1.8s ease-out infinite',
         'fade-in':  'fade-in 240ms cubic-bezier(0.34, 1.2, 0.64, 1) both',
         'slide-down': 'slide-down 200ms cubic-bezier(0.34, 1.2, 0.64, 1) both',
+        'slide-in-right': 'slide-in-right 280ms cubic-bezier(0.22, 1, 0.36, 1) both',
       },
       transitionTimingFunction: {
         'spring': 'cubic-bezier(0.34, 1.56, 0.64, 1)',
