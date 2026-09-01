@@ -27,14 +27,14 @@ void _evaluateCommand; // reserved for the in-process evaluation path
 
 // ----- JSON-RPC 2.0 envelopes -----
 
-interface JsonRpcRequest {
+export interface JsonRpcRequest {
   jsonrpc: '2.0';
   id?: string | number | null;
   method: string;
   params?: unknown;
 }
 
-interface JsonRpcResponse {
+export interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: string | number | null | undefined;
   result?: unknown;
@@ -608,7 +608,16 @@ function rpcError(
   return { jsonrpc: '2.0', id: req.id, error: { code, message, ...(data ? { data } : {}) } };
 }
 
-async function handleToolCall(
+/**
+ * Dispatch a single tool call. Exported so the AI chat
+ * route can reuse the same handlers (and therefore the same
+ * auth, RBAC, and brain-command-queue integration) without
+ * going through HTTP. The AI builds a fake `JsonRpcRequest`
+ * envelope and a fake `FastifyRequest` with the user's
+ * `auth` set; everything downstream is the same code path
+ * as the MCP `/mcp` endpoint.
+ */
+export async function handleToolCall(
   req: JsonRpcRequest,
   name: string,
   args: Record<string, unknown>,

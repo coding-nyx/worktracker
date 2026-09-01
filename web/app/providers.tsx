@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '../components/ThemeToggle';
 import { AuthProvider, useAuth } from '../lib/auth';
+import { ChatPanel } from '../components/ChatPanel';
 
 /**
  * Event name the credentials bootstrap fires after writing the
@@ -21,6 +22,32 @@ export const CREDENTIALS_BOOTSTRAPPED_EVENT = 'worktracker:credentials-bootstrap
 
 // Public paths that don't require Firebase Auth.
 const PUBLIC_PATHS = new Set<string>(['/login']);
+
+// ----- AI chat open/close -----
+// The chat panel is global UI; the open state is lifted here so
+// the top-bar launcher and the panel can both read/write it
+// without prop-drilling.
+interface ChatUi {
+  open: boolean;
+  setOpen: (v: boolean) => void;
+  toggle: () => void;
+}
+const ChatContext = createContext<ChatUi | null>(null);
+export function useChatUi(): ChatUi {
+  const ctx = useContext(ChatContext);
+  if (!ctx) throw new Error('useChatUi must be used inside <Providers>');
+  return ctx;
+}
+function ChatHost({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => setOpen((v) => !v);
+  return (
+    <ChatContext.Provider value={{ open, setOpen, toggle }}>
+      {children}
+      <ChatPanel open={open} onClose={() => setOpen(false)} />
+    </ChatContext.Provider>
+  );
+}
 
 function AuthGate({ children }: { children: ReactNode }) {
   const auth = useAuth();
@@ -67,7 +94,9 @@ export function Providers({ children }: { children: ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <AuthProvider>
-          <AuthGate>{children}</AuthGate>
+          <AuthGate>
+            <ChatHost>{children}</ChatHost>
+          </AuthGate>
         </AuthProvider>
       </ThemeProvider>
     </QueryClientProvider>

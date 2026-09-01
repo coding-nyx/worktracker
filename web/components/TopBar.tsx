@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import { useAuth } from '../lib/auth';
+import { useChatUi } from '../app/providers';
 
 const NAV = [
   { href: '/',          label: 'Kanban' },
@@ -21,6 +22,7 @@ export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
   const auth = useAuth();
+  const chat = useChatUi();
   const [signingOut, setSigningOut] = useState(false);
 
   async function onSignOut() {
@@ -35,7 +37,6 @@ export function TopBar() {
   }
 
   const isAdmin = auth.isAdmin;
-  const onAdminSection = pathname?.startsWith('/admin');
 
   return (
     <header className="sticky top-0 z-40 border-b border-border-subtle bg-bg-base/80 backdrop-blur-md">
@@ -83,15 +84,38 @@ export function TopBar() {
         </nav>
         <div className="ml-auto flex items-center gap-2">
           {auth.firebaseUser ? (
-            <button
-              type="button"
-              onClick={onSignOut}
-              disabled={signingOut}
-              className="btn-ghost focus-ring text-[13px] text-ink-2 disabled:opacity-50"
-              title={auth.firebaseUser.email ?? 'Sign out'}
-            >
-              {signingOut ? 'Signing out…' : 'Sign out'}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={chat.toggle}
+                aria-label="Open AI assistant"
+                aria-pressed={chat.open}
+                className={`focus-ring inline-flex items-center gap-1.5 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12.5px] font-medium transition-colors ${
+                  chat.open ? 'bg-brand-500/15 text-brand-500' : 'bg-bg-raised text-ink-2 hover:bg-bg-sunken'
+                }`}
+                title="WorkTracker AI"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M12 2 14 8.5 21 9.5 16 14 17.5 21 12 17.5 6.5 21 8 14 3 9.5 10 8.5z" />
+                </svg>
+                AI
+              </button>
+              <Link
+                href="/settings"
+                className={`nav-link focus-ring ${pathname === '/settings' ? 'nav-link-active bg-bg-raised' : ''}`}
+              >
+                Settings
+              </Link>
+              <button
+                type="button"
+                onClick={onSignOut}
+                disabled={signingOut}
+                className="btn-ghost focus-ring text-[13px] text-ink-2 disabled:opacity-50"
+                title={auth.firebaseUser.email ?? 'Sign out'}
+              >
+                {signingOut ? 'Signing out…' : 'Sign out'}
+              </button>
+            </>
           ) : null}
           <ThemeToggle />
         </div>
