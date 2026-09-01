@@ -25,6 +25,7 @@ import type {
   UpdateBoardRequest,
   WorkItem,
   WorkItemEvent,
+  WorktrackerUser,
 } from '@worktracker/types';
 import { getFirebaseAuth } from './firebase';
 
@@ -139,6 +140,15 @@ export const api = {
 
   listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/api/sources'),
   createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/api/sources', body),
+
+  // Admin: user management. listUsers / updateUser / inviteUser.
+  // All three require an admin (is_admin: true) bearer; the API
+  // returns 403 otherwise.
+  listUsers: () => request<{ users: WorktrackerUser[] }>('GET', '/api/admin/users'),
+  updateUser: (uid: string, patch: { is_admin?: boolean; enabled?: boolean; display_name?: string | null }) =>
+    request<{ user: WorktrackerUser }>('PATCH', `/api/admin/users/${uid}`, patch),
+  inviteUser: (body: { email: string; password: string; display_name?: string; is_admin?: boolean }) =>
+    request<{ user: WorktrackerUser }>('POST', '/api/admin/users/invite', body),
 
   // Boards: saved kanban views with named columns and a kind
   // filter. Read by anyone; create/update/delete are admin-only

@@ -12,6 +12,11 @@ const NAV = [
   { href: '/admin',     label: 'Connectors' },
 ] as const;
 
+const ADMIN_NAV: { href: string; label: string }[] = [
+  { href: '/admin/users', label: 'Users' },
+  { href: '/admin/boards', label: 'Boards' },
+];
+
 export function TopBar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -28,6 +33,9 @@ export function TopBar() {
       setSigningOut(false);
     }
   }
+
+  const isAdmin = auth.isAdmin;
+  const onAdminSection = pathname?.startsWith('/admin');
 
   return (
     <header className="sticky top-0 z-40 border-b border-border-subtle bg-bg-base/80 backdrop-blur-md">
@@ -54,6 +62,24 @@ export function TopBar() {
               </Link>
             );
           })}
+          {isAdmin ? (
+            <>
+              <span aria-hidden className="mx-1 h-4 w-px bg-border-subtle" />
+              {ADMIN_NAV.map((item) => {
+                const active = pathname?.startsWith(item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`nav-link focus-ring ${active ? 'nav-link-active bg-bg-raised' : ''}`}
+                    aria-current={active ? 'page' : undefined}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </>
+          ) : null}
         </nav>
         <div className="ml-auto flex items-center gap-2">
           {auth.firebaseUser ? (
