@@ -126,6 +126,23 @@ export async function buildApp(): Promise<FastifyInstance> {
       });
       return;
     }
+    // The custom body parser above calls JSON.parse on the raw
+    // request body. When the body has a literal control character
+    // (e.g. a real newline inside a string) V8 throws a
+    // SyntaxError like "Bad control character in string literal
+    // in JSON at position N". Surface a clean 400 with a
+    // useful message instead of leaking the V8 text.
+    if (err instanceof SyntaxError || /Bad control character|Unexpected token|JSON/i.test(err.message)) {
+      reply.code(400).send({
+        error: {
+          code: 'invalid_json',
+          message:
+            'Request body is not valid JSON. Escape control characters (newlines, tabs) in string values, or send the body with proper JSON encoding.',
+          details: { reason: err.message },
+        },
+      });
+      return;
+    }
     req.log.error({ err }, 'unhandled error');
     reply.code(500).send({
       error: { code: 'internal_error', message: 'internal server error' },

@@ -70,9 +70,9 @@ export function ChatPanel({ open, onClose }: ChatPanelProps) {
     } catch (err) {
       if (err instanceof ChatError) {
         if (err.code === 'ai_not_configured') setNotConfigured(true);
-        setError(err.message);
+        setError(humanizeChatError(err.code, err.message));
       } else {
-        setError((err as Error).message || 'chat failed');
+        setError(humanizeChatError('unknown', (err as Error).message));
       }
     } finally {
       setPending(false);
@@ -253,4 +253,36 @@ function summarizeArgs(args: Record<string, unknown>): string {
     }
   }
   return parts.join(' ') || '—';
+}
+
+/**
+ * Map a server error code to a chat-friendly message. The
+ * server is the source of truth for the *cause*; this just
+ * strips V8 internals from "Bad control character in string
+ * literal in JSON at position 51 (line 3 column 25)" and
+ * turns it into something a person can act on.
+ */
+function humanizeChatError(code: string, raw: string): string {
+  switch (code) {
+    case 'ai_not_configured':
+      return 'The AI is not configured on the server yet. Set AI_API_KEY (and AI_BASE_URL, AI_MODEL) on the API and redeploy.';
+    case 'invalid_json':
+      return 'The request had a formatting problem — likely a literal newline in a string. Try again, or paste from a fresh editor.';
+    case 'ai_provider_error':
+      return 'The AI provider rejected the request. The model may be temporarily unavailable, or the request exceeded a rate limit. Try again in a moment.';
+    case 'not_a_user':
+      return 'Sign in with email/password to use the AI.';
+    case 'unauthenticated':
+    case 'unauthorized':
+      return 'Your session expired. Sign in again.';
+    case 'forbidden':
+      return "You don't have access to that.";
+    default:
+      // Fall back to the raw message; if it looks like a
+      // V8 JSON parser error, replace it with a generic one.
+      if (/Bad control character|Unexpected token|JSON at position/i.test(raw)) {
+        return 'The request had a formatting problem. Try again with a fresh editor.';
+      }
+      return raw || 'chat failed';
+  }
 }
