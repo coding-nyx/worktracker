@@ -18,8 +18,8 @@ import type {
   WorkItemStatus,
   WorkItemKind,
 } from '@worktracker/types';
-import { api, getCredentials, setCredentials as setApiCredentials } from '../lib/api';
-import { CREDENTIALS_BOOTSTRAPPED_EVENT } from './providers';
+import { api } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
 import { Pill, statusToPillKind, type StatusKind } from '../components/Pill';
 import { EmptyState } from '../components/EmptyState';
@@ -235,7 +235,7 @@ function PageHeader({
         <div className="flex flex-wrap items-center gap-2">
           <BoardPicker boards={boards} activeBoardId={activeBoardId} onChange={onBoardChange} />
           <SourceFilter value={sourceFilter} onChange={onSourceFilterChange} sources={sources} />
-          <CredentialsGate />
+          <CurrentUser />
         </div>
       </div>
 
@@ -520,40 +520,29 @@ function HiddenByKindSection({
 }
 
 /* -------------------------------------------------------------------------- */
-/* First-run auth gate — prompts for API base + admin token if missing.       */
+/* Current user chip — shows the signed-in email and admin badge in the        */
+/* page header. The auth gate in providers.tsx already redirects to /login    */
+/* when the user is not signed in, so this is purely informational.            */
 
-function CredentialsGate() {
-  const [hasCreds, setHasCreds] = useState<boolean | null>(null);
-  const refresh = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    const { apiBase, token } = getCredentials();
-    setHasCreds(Boolean(apiBase && token));
-  }, []);
-  useEffect(() => {
-    refresh();
-    if (typeof window === 'undefined') return;
-    window.addEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
-    return () => window.removeEventListener(CREDENTIALS_BOOTSTRAPPED_EVENT, refresh);
-  }, [refresh]);
-  if (hasCreds === false) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          const apiBase = window.prompt('WorkTracker API base URL', window.location.origin) ?? '';
-          const token = window.prompt('Admin token') ?? '';
-          if (apiBase && token) {
-            setApiCredentials(apiBase, token);
-            window.location.reload();
-          }
-        }}
-        className="btn-primary focus-ring"
-      >
-        Sign in
-      </button>
-    );
-  }
-  return null;
+function CurrentUser() {
+  const auth = useAuth();
+  if (!auth.firebaseUser) return null;
+  const email = auth.firebaseUser.email ?? '';
+  const isAdmin = auth.isAdmin;
+  return (
+    <div className="hidden items-center gap-2 text-[12px] text-ink-2 sm:flex">
+      <span
+        aria-hidden
+        className={`inline-block h-1.5 w-1.5 rounded-full ${isAdmin ? 'bg-status-ready-500' : 'bg-ink-3'}`}
+      />
+      <span className="truncate max-w-[200px]">{email}</span>
+      {isAdmin ? (
+        <span className="rounded-md border border-brand-500/30 bg-brand-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-brand-500">
+          admin
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 /* -------------------------------------------------------------------------- */

@@ -775,7 +775,7 @@ async function handleToolCall(
       return { jsonrpc: '2.0', id: req.id, result: { board: doc.data() as Board } };
     }
     case 'worktracker_create_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
         return rpcError(req, -32603, 'create_board is admin-only');
       }
       const body = z
@@ -815,7 +815,7 @@ async function handleToolCall(
       return { jsonrpc: '2.0', id: req.id, result: { board } };
     }
     case 'worktracker_update_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
         return rpcError(req, -32603, 'update_board is admin-only');
       }
       const body = z
@@ -861,7 +861,7 @@ async function handleToolCall(
       return { jsonrpc: '2.0', id: req.id, result: { board: next } };
     }
     case 'worktracker_delete_board': {
-      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin') {
+      if (httpReq.auth?.source?.name !== 'web' && httpReq.auth?.kind !== 'admin' && httpReq.auth?.user?.is_admin !== true) {
         return rpcError(req, -32603, 'delete_board is admin-only');
       }
       const id = z.object({ id: z.string().min(1).max(64) }).parse(args).id;

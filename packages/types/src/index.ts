@@ -219,6 +219,30 @@ export interface SourceRegistration {
 }
 
 // =====================================================================
+// Users (Firebase Auth-backed)
+// =====================================================================
+
+/**
+ * Per-user record stored at `users/{firebase_uid}`. Created
+ * lazily on first sign-in (see auth.ts). The first user to
+ * sign in becomes admin; subsequent users default to non-admin
+ * and require an existing admin to promote them.
+ *
+ * The Firebase Auth ID token's `sub` is the document ID; the
+ * ID token's `email` claim is mirrored here for display.
+ */
+export interface WorktrackerUser {
+  firebase_uid: string;
+  email: string;
+  display_name: string | null;
+  is_admin: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  last_seen_at: string | null;
+}
+
+// =====================================================================
 // Commands (the brain's input)
 // =====================================================================
 

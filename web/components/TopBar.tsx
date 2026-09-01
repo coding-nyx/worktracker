@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { ThemeToggle } from './ThemeToggle';
+import { useAuth } from '../lib/auth';
 
 const NAV = [
   { href: '/',          label: 'Kanban' },
@@ -12,6 +14,21 @@ const NAV = [
 
 export function TopBar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const auth = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function onSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await auth.signOut();
+      router.replace('/login');
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
   return (
     <header className="sticky top-0 z-40 border-b border-border-subtle bg-bg-base/80 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-[1600px] items-center gap-6 px-5 sm:px-8">
@@ -39,6 +56,17 @@ export function TopBar() {
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2">
+          {auth.firebaseUser ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              disabled={signingOut}
+              className="btn-ghost focus-ring text-[13px] text-ink-2 disabled:opacity-50"
+              title={auth.firebaseUser.email ?? 'Sign out'}
+            >
+              {signingOut ? 'Signing out…' : 'Sign out'}
+            </button>
+          ) : null}
           <ThemeToggle />
         </div>
       </div>

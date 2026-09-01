@@ -1,9 +1,12 @@
 /**
- * REST + MCP client for the WorkTracker web UI. Uses the
- * admin token (in the `WORKTRACKER_ADMIN_TOKEN` env at deploy
- * time, stored in localStorage in the browser) for all calls.
+ * REST + MCP client for the WorkTracker web UI. Authenticates
+ * with a Firebase Auth ID token when one is available
+ * (`getFirebaseAuth().currentUser`), falling back to the
+ * admin token in localStorage for source-bearer flows.
  *
- * Single-user v0: the UI is always running as the admin.
+ * Firebase Auth is the primary auth path; the admin-token
+ * fallback is for operator scripts, MCP, and the deep-link
+ * hash bootstrap.
  */
 
 import type {
@@ -23,6 +26,7 @@ import type {
   WorkItem,
   WorkItemEvent,
 } from '@worktracker/types';
+import { getFirebaseAuth } from './firebase';
 
 const TOKEN_KEY = 'worktracker.admin_token';
 const API_BASE_KEY = 'worktracker.api_base';
@@ -35,19 +39,36 @@ function apiBase(): string {
   return process.env.NEXT_PUBLIC_API_BASE ?? '';
 }
 
-function token(): string {
+function adminToken(): string {
   if (typeof window === 'undefined') return '';
   return window.localStorage.getItem(TOKEN_KEY) ?? '';
 }
 
-export function setCredentials(apiBaseUrl: string, adminToken: string): void {
+/**
+ * Resolve the bearer for an outgoing request. Prefers the
+ * Firebase Auth ID token (signed-in user); falls back to the
+ * admin token in localStorage (source-bearer flow). The ID
+ * token is force-refreshed when within 60s of expiry so a
+ * long-lived page doesn't issue a request with a stale token.
+ */
+async function bearer(): Promise<string> {
+  const auth = getFirebaseAuth();
+  const u = auth.currentUser;
+  if (u) {
+    const token = await u.getIdToken();
+    if (token) return token;
+  }
+  return adminToken();
+}
+
+export function setCredentials(apiBaseUrl: string, token: string): void {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(API_BASE_KEY, apiBaseUrl);
-  window.localStorage.setItem(TOKEN_KEY, adminToken);
+  window.localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function getCredentials(): { apiBase: string; token: string } {
-  return { apiBase: apiBase(), token: token() };
+  return { apiBase: apiBase(), token: adminToken() };
 }
 
 export class ApiError extends Error {
@@ -63,7 +84,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { Authorization: `Bearer ${token()}` };
+  const headers: Record<string, string> = { Authorization: `Bearer ${await bearer()}` };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(`${apiBase()}${path}`, {
     method,
