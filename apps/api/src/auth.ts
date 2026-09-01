@@ -398,23 +398,44 @@ async function resolveApiTokenFromId(
  * Compute the caller's effective permission scope. Used by the
  * dispatch layer to gate write and admin tools.
  *
- *   - Admin token or `req.auth.kind === 'admin'` -> 'admin'
+ *   - Admin token or `req.auth.kind === 'admin'`  -> 'admin'
  *   - Firebase user with `is_admin: true`         -> 'admin'
  *   - Synthetic 'web' source (React app)         -> 'admin'
+ *   - Legacy source bearer whose name is on the
+ *     `adminSources` allowlist (see `Config.adminSources`,
+ *     default `['hermes', 'claude', 'codex']`)    -> 'admin'
  *   - API token (req.auth.scope set)             -> token's scope
- *   - Legacy source bearer (sources collection)  -> 'read_write'
+ *   - Any other legacy source bearer             -> 'read_write'
  *
- * The last rule preserves back-compat: the existing per-source
- * bearers (Claude Code, Codex, Hermes) keep the full read+write
- * access they had before API tokens existed. New API tokens are
- * the only callers that get the explicit downscoped behavior.
+ * The legacy allowlist preserves the v0.4 contract that the
+ * three named MCP clients had full read+write+admin access
+ * before API tokens existed. Unknown legacy sources stay at
+ * `read_write`; new API tokens are the only callers that get
+ * the explicit downscoped behavior.
  */
 export function getEffectiveScope(req: FastifyRequest): ApiTokenScope {
   if (req.auth?.kind === 'admin') return 'admin';
   if (req.auth?.source?.name === 'web') return 'admin';
   if (req.auth?.user?.is_admin === true) return 'admin';
+  if (isAdminSource(req)) return 'admin';
   if (req.auth?.scope) return req.auth.scope;
   return 'read_write';
+}
+
+/**
+ * True when the caller is a legacy source bearer whose name is
+ * on the admin allowlist AND whose source record is enabled.
+ * Disabled sources are rejected upstream by `requireSource`
+ * (throws `ForbiddenError('source disabled')`), so checking
+ * `enabled` here is belt-and-braces.
+ */
+function isAdminSource(req: FastifyRequest): boolean {
+  const auth = req.auth;
+  if (auth?.kind !== 'source') return false;
+  const source = auth.source;
+  if (!source || source.enabled === false) return false;
+  const allow = loadConfig().adminSources;
+  return allow.includes(source.name);
 }
 
 const SCOPE_RANK: Record<ApiTokenScope, number> = {

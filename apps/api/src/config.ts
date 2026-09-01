@@ -16,6 +16,21 @@ export interface Config {
   llmBaseUrl?: string;
   /** Optional MiniMax API key. */
   llmApiKey?: string;
+  /**
+   * Legacy source bearer names that get full `admin` scope
+   * (in addition to the `admin` token, the `web` source, and
+   * Firebase users with `is_admin: true`). Defaults to the three
+   * MCP clients we know: hermes, claude, codex. Override with
+   * `WORKTRACKER_ADMIN_SOURCES="hermes,claude,codex,n8n"` (comma
+   * separated, no spaces).
+   *
+   * Why an allowlist: the per-source bearers predate the v0.5
+   * API-token model and were assumed admin-equivalent. Tightening
+   * them to `read_write` broke legitimate MCP clients; the
+   * allowlist restores the original behavior without reopening
+   * the door to unknown sources.
+   */
+  adminSources: string[];
 }
 
 function readEnv(name: string, fallback?: string): string {
@@ -46,5 +61,14 @@ export function loadConfig(): Config {
     firestoreProject: gcloudProject,
     llmBaseUrl: process.env.WORKTRACKER_LLM_BASE_URL,
     llmApiKey: process.env.WORKTRACKER_LLM_API_KEY,
+    // Comma-separated source names. Empty / unset -> the v0.4
+    // default allowlist (the three MCP clients we know ship).
+    // Dedupe so a user-supplied list that already contains
+    // 'hermes' doesn't double-count.
+    adminSources: Array.from(new Set(
+      (process.env.WORKTRACKER_ADMIN_SOURCES
+        ? process.env.WORKTRACKER_ADMIN_SOURCES.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+        : ['hermes', 'claude', 'codex'])
+    )),
   };
 }

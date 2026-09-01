@@ -398,24 +398,38 @@ Then list the tools and call one:
 
 ## Auth model
 
-Two paths through \`requireSource\`:
+Three paths through \`requireSource\`:
 
 1. **Admin token.** \`WORKTRACKER_ADMIN_TOKEN\`. Sets
    \`req.auth = { kind: 'admin' }\`. Bypasses the sources collection.
-2. **Source bearer.** Scrypt-hashed at registration. Tokens shaped
-   \`<source>.<key>\` get an O(1) lookup against \`sources/{name}\`. Other
-   shapes iterate the collection. Verified with \`timingSafeEqual\`.
+2. **Firebase Auth ID token** (three dot-separated base64
+   segments). Verifies the signature via
+   \`getAuth().verifyIdToken\`. A user with \`is_admin: true\` is
+   admin-equivalent; everyone else is \`read\`.
+3. **API token** (\`wt_<tokenId>\`) or **legacy source bearer**
+   (\`<source>.<key>\`, scrypt-hashed at registration). API
+   tokens carry their own \`scope\`; legacy sources resolve
+   through the sources collection and get
+   \`read_write\` by default, or \`admin\` if their name is on
+   the \`adminSources\` allowlist (default
+   \`['hermes', 'claude', 'codex']\`, override with the
+   comma-separated env \`WORKTRACKER_ADMIN_SOURCES\`).
 
 A source with \`enabled: false\` returns \`403\`.
 
 The three board admin tools
 (\`worktracker_create_board\`, \`worktracker_update_board\`,
-\`worktracker_delete_board\`) require either:
+\`worktracker_delete_board\`) require effective scope
+\`admin\`, which means any of:
 
-- \`req.auth.kind === 'admin'\`, or
-- \`req.auth.source.name === 'web'\` (the React app's virtual admin path)
+- \`req.auth.kind === 'admin'\` (admin token)
+- \`req.auth.source.name === 'web'\` (React app's virtual admin)
+- \`req.auth.user.is_admin === true\` (Firebase user)
+- legacy source bearer on the \`adminSources\` allowlist
+- API token with \`scope: 'admin'\`
 
-All other tools accept any enabled source.
+All other tools accept any enabled caller with at least
+\`read\` scope.
 
 ---
 
@@ -442,9 +456,9 @@ All other tools accept any enabled source.
 | --- | --- | --- |
 | \`worktracker_list_boards\`   | any source | All boards, ordered by name |
 | \`worktracker_get_board\`     | any source | One board by id |
-| \`worktracker_create_board\`  | admin      | Create; \`is_default: true\` unsets the previous default first |
-| \`worktracker_update_board\`  | admin      | Patch fields; re-assigning default unsets the previous |
-| \`worktracker_delete_board\`  | admin      | Delete by id; default board returns \`cannot_delete_default\` |
+| \`worktracker_create_board\`  | admin scope| Create; \`is_default: true\` unsets the previous default first |
+| \`worktracker_update_board\`  | admin scope| Patch fields; re-assigning default unsets the previous |
+| \`worktracker_delete_board\`  | admin scope| Delete by id; default board returns \`cannot_delete_default\` |
 
 ### Cost profile
 
