@@ -677,25 +677,28 @@ export async function dispatchTool(
           return { ok: false, error: 'list_items requires read scope', code: -32603 };
         }
         const query = (args as unknown as ListItemsQuery) ?? {};
+        const wantLimit = query.limit ?? 50;
         let ref = getDb().collection('work_items').orderBy('updated_at', 'desc');
         if (query.kind) ref = ref.where('kind', '==', query.kind);
         if (query.status) ref = ref.where('status', '==', query.status);
         if (query.source) ref = ref.where('source', '==', query.source);
         if (query.owner) ref = ref.where('owner', '==', query.owner);
-        // Firestore's `where('archived_at', '==', null)` matches
-        // both null and missing fields, so the active-only filter
-        // is indexable and the limit isn't wasted on archived
-        // items. (An earlier version filtered post-fetch and
-        // returned the full set when most items were archived.)
-        if (!query.include_archived) {
-          ref = ref.where('archived_at', '==', null);
-        }
-        ref = ref.limit(query.limit ?? 50);
+        // Over-fetch when the archived filter is on so the
+        // post-fetch filter has enough material. Capped at 200
+        // to keep one bad query from pulling the whole
+        // collection.
+        const fetchLimit = query.include_archived ? wantLimit : Math.min(200, wantLimit * 4);
+        ref = ref.limit(fetchLimit);
         const snap = await ref.get();
         let items: WorkItem[] = snap.docs.map((d) => d.data() as WorkItem);
-        // Text search is post-fetch because Firestore doesn't
-        // support LIKE; the upstream limit is 50/200 so the
-        // post-filter is bounded.
+        // Firestore's `where('archived_at', '==', null)` doesn't
+        // match docs where the field is explicitly null (only
+        // missing fields) — verified against the live data. The
+        // post-fetch filter is the safe move; a dedicated
+        // archived_at index would be the proper fix for v0.5.
+        if (!query.include_archived) {
+          items = items.filter((it) => !it.archived_at);
+        }
         if (query.q) {
           const needle = query.q.toLowerCase();
           items = items.filter(
@@ -704,6 +707,7 @@ export async function dispatchTool(
               (it.body?.toLowerCase().includes(needle) ?? false),
           );
         }
+        items = items.slice(0, wantLimit);
         return { ok: true, value: { items } };
       }
       case 'worktracker_get_item': {
