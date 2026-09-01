@@ -14,7 +14,7 @@ import type {
   WorkItemEvent,
 } from '@worktracker/types';
 import { getDb } from '../firestore.js';
-import { requireSource } from '../auth.js';
+import { requireScopeAtLeast, requireSource } from '../auth.js';
 import { InvalidInputError, NotFoundError } from '../errors.js';
 import { ulid, nowIso } from '../ids.js';
 
@@ -138,7 +138,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return response;
   });
 
-  app.post('/api/items', { preHandler: requireSource }, async (req, reply) => {
+  app.post('/api/items', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const body = CreateSchema.parse(req.body);
     const commandId = ulid();
     const source = req.auth!.source?.name ?? 'web';
@@ -183,7 +183,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return doc.data() as WorkItem;
   });
 
-  app.patch('/api/items/:id', { preHandler: requireSource }, async (req, reply) => {
+  app.patch('/api/items/:id', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const body = UpdateSchema.parse(req.body);
     const source = req.auth!.source?.name ?? 'web';
@@ -208,7 +208,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return { command_id: command.id, status: 'queued' };
   });
 
-  app.delete('/api/items/:id', { preHandler: requireSource }, async (req, reply) => {
+  app.delete('/api/items/:id', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const existing = await getDb().collection('work_items').doc(id).get();
     if (!existing.exists) throw new NotFoundError(`work item ${id} not found`);
@@ -248,7 +248,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return { events };
   });
 
-  app.post('/api/items/:id/transition', { preHandler: requireSource }, async (req, reply) => {
+  app.post('/api/items/:id/transition', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const body = TransitionSchema.parse(req.body);
     const source = req.auth!.source?.name ?? 'web';
@@ -273,7 +273,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return { command_id: command.id, status: 'queued' };
   });
 
-  app.post('/api/items/:id/comment', { preHandler: requireSource }, async (req, reply) => {
+  app.post('/api/items/:id/comment', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const body = CommentSchema.parse(req.body);
     const source = req.auth!.source?.name ?? 'web';
@@ -298,7 +298,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return { command_id: command.id, status: 'queued' };
   });
 
-  app.post('/api/items/:id/link', { preHandler: requireSource }, async (req, reply) => {
+  app.post('/api/items/:id/link', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const body = LinkSchema.parse(req.body) satisfies LinkRequest;
     const source = req.auth!.source?.name ?? 'web';
@@ -323,7 +323,7 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     return { command_id: command.id, status: 'queued' };
   });
 
-  app.post('/api/items/:id/enrich', { preHandler: requireSource }, async (req, reply) => {
+  app.post('/api/items/:id/enrich', { preHandler: [requireSource, requireScopeAtLeast('read_write')] }, async (req, reply) => {
     const { id } = z.object({ id: ItemId }).parse(req.params);
     const body = EnrichSchema.parse(req.body) satisfies EnrichRequest;
     const source = req.auth!.source?.name ?? 'web';

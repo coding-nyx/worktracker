@@ -74,30 +74,23 @@ function extractBearer(req: FastifyRequest): string | null {
 
 /**
  * Admin-only. Used for source registration, conflict resolution,
- * the Hermes bridge, etc.
+ * the Hermes bridge, board CRUD, user management.
  *
- * Accepts either the static admin token (operator scripts) OR a
- * Firebase Auth ID token whose corresponding `users/{uid}` doc
- * has `is_admin: true`. The first Firebase user to sign in is
- * auto-promoted to admin; subsequent users default to non-admin
- * and need an existing admin to flip their flag.
+ * Accepts any caller whose effective scope is `admin`:
+ *   - the static `WORKTRACKER_ADMIN_TOKEN` (operator scripts)
+ *   - a Firebase Auth ID token whose `users/{uid}` doc has
+ *     `is_admin: true` (the web UI's admin)
+ *   - a `wt_<tokenId>` API token with `scope: 'admin'`
+ *
+ * Composed of `requireSource` (handles all three token shapes
+ * and resolves to a worktracker user / synthetic source / admin)
+ * plus a `hasScopeAtLeast('admin')` gate.
  */
 export async function requireAdmin(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
-  const token = extractBearer(req);
-  if (token && token === ADMIN_TOKEN) {
-    req.auth = { kind: 'admin' };
-    return;
+  await requireSource(req, _reply);
+  if (!hasScopeAtLeast(req, 'admin')) {
+    throw new ForbiddenError('admin scope required');
   }
-  if (token && looksLikeJwt(token)) {
-    const user = await resolveUserFromFirebaseToken(token);
-    if (user) {
-      if (!user.enabled) throw new ForbiddenError('user disabled');
-      if (!user.is_admin) throw new ForbiddenError('admin access required');
-      req.auth = { kind: 'user', user };
-      return;
-    }
-  }
-  throw new UnauthorizedError('admin token invalid');
 }
 
 /**
@@ -432,4 +425,19 @@ const SCOPE_RANK: Record<ApiTokenScope, number> = {
 
 export function hasScopeAtLeast(req: FastifyRequest, required: ApiTokenScope): boolean {
   return SCOPE_RANK[getEffectiveScope(req)] >= SCOPE_RANK[required];
+}
+
+/**
+ * PreHandler: reject requests whose effective scope is below
+ * `required`. Used to gate write and admin REST routes so an
+ * API token with `read` scope literally cannot POST or PATCH,
+ * even if it knows the route. Mirror of the same check the MCP
+ * dispatchTool does inside its tool switch.
+ */
+export function requireScopeAtLeast(required: ApiTokenScope) {
+  return async (req: FastifyRequest, _reply: FastifyReply): Promise<void> => {
+    if (!hasScopeAtLeast(req, required)) {
+      throw new ForbiddenError(`${required} scope required`);
+    }
+  };
 }
