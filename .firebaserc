@@ -1,6 +1,17 @@
 {
   "projects": {
-    "default": "worktracker-local",
-    "worktracker-local": "worktracker-local"
-  }
+    "default": "worktracker-prod-2026",
+    "worktracker-local": "worktracker-local",
+    "worktracker-prod-2026": "worktracker-prod-2026"
+  },
+  "targets": {
+    "worktracker-prod-2026": {
+      "hosting": {
+        "default": [
+          "worktracker-nyx"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

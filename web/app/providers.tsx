@@ -15,7 +15,7 @@ export const CREDENTIALS_BOOTSTRAPPED_EVENT = 'worktracker:credentials-bootstrap
 
 /**
  * URL-hash based credential bootstrap. Lets the operator deep-link
- * `https://worktracker-prod-2026.web.app/#apiBase=…&token=…` and
+ * `https://worktracker-nyx.web.app/#apiBase=…&token=…` and
  * land on the kanban pre-signed in. After reading, the hash is
  * stripped from the URL so the token isn't visible in browser
  * history or shared screenshots.

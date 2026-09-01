@@ -146,7 +146,7 @@ repo secrets set under `Settings → Secrets and variables → Actions`:
 
 | Secret | Purpose |
 | --- | --- |
-| `SMOKE_API_BASE` | The canonical host the smoke test should hit (e.g. `https://worktracker-prod-2026.web.app`). |
+| `SMOKE_API_BASE` | The canonical host the smoke test should hit (e.g. `https://worktracker-nyx.web.app`). |
 | `SMOKE_ADMIN_TOKEN` | The `WORKTRACKER_ADMIN_TOKEN` value, so the script can `POST /api/items` and `POST /api/boards` against the live API. |
 | `GCP_SA_KEY` | A GCP service-account JSON key with the roles `Cloud Run Invoker` and `Firestore User` on the project. Used by `gcloud auth activate-service-account` so the smoke run can do admin-level Firestore cleanup via `gcloud firestore`. |
 
@@ -329,7 +329,7 @@ Returns an array of 15 tool definitions. The full table:
 
 ```bash
 # 1. Initialize.
-curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+curl -sS -X POST https://worktracker-nyx.web.app/mcp \
   -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
@@ -338,14 +338,14 @@ curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
                  "clientInfo":{"name":"docs","version":"1.0"}}}'
 
 # 2. Discover.
-curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+curl -sS -X POST https://worktracker-nyx.web.app/mcp \
   -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 
 # 3. Create a "Today" board with two columns, as the default.
-curl -sS -X POST https://worktracker-prod-2026.web.app/mcp \
+curl -sS -X POST https://worktracker-nyx.web.app/mcp \
   -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \

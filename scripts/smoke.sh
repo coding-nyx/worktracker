@@ -14,12 +14,12 @@
 #   ./scripts/smoke.sh
 #
 # Env (optional):
-#   API_BASE   default https://worktracker-prod-2026.web.app
+#   API_BASE   default https://worktracker-nyx.web.app
 #   ADMIN_TOKEN default worktracker-prod-2026-admin-token
 
 set -euo pipefail
 
-API_BASE="${API_BASE:-https://worktracker-prod-2026.web.app}"
+API_BASE="${API_BASE:-https://worktracker-nyx.web.app}"
 ADMIN_TOKEN="${ADMIN_TOKEN:-worktracker-prod-2026-admin-token}"
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }

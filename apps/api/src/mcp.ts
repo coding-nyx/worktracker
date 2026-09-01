@@ -277,7 +277,7 @@ const TOOLS = [
 // ----- Discoverability doc (served on GET /mcp.md) -----
 //
 // A Markdown on-ramp for LLM agents (Claude Code, Codex, Hermes) so they
-// can be pointed at `https://worktracker-prod-2026.web.app/mcp.md` and
+// can be pointed at `https://worktracker-nyx.web.app/mcp.md` and
 // figure out how to connect + what tools exist, without first having
 // the connection wired up in a config file. The doc is public — auth
 // is only enforced on POST /mcp.
@@ -288,7 +288,7 @@ A source-authenticated JSON-RPC 2.0 surface for the WorkTracker kanban.
 Any MCP client (Claude Code, Codex, Hermes, custom GPTs) can read kanban
 state, mutate work items, and manage boards through a single HTTP endpoint.
 
-- **Server URL:** \`https://worktracker-prod-2026.web.app/mcp\`
+- **Server URL:** \`https://worktracker-nyx.web.app/mcp\`
 - **Protocol:** JSON-RPC 2.0 over HTTP
 - **Transport:** Request/response in v0 (SSE endpoint is registered but
   does not yet push events)
@@ -310,7 +310,7 @@ A source is a named API client. The admin creates it; the API returns a
 the plaintext is shown once.
 
 \`\`\`bash
-curl -X POST https://worktracker-prod-2026.web.app/api/sources \\
+curl -X POST https://worktracker-nyx.web.app/api/sources \\
   -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"name":"my-agent","kind":"external"}'
@@ -337,7 +337,7 @@ Treat \`bearer\` like a password.
   "mcpServers": {
     "worktracker": {
       "type": "http",
-      "url": "https://worktracker-prod-2026.web.app/mcp",
+      "url": "https://worktracker-nyx.web.app/mcp",
       "headers": {
         "Authorization": "Bearer my-agent.E7pK2..."
       }
@@ -350,7 +350,7 @@ Treat \`bearer\` like a password.
 
 \`\`\`toml
 [mcp_servers.worktracker]
-url = "https://worktracker-prod-2026.web.app/mcp"
+url = "https://worktracker-nyx.web.app/mcp"
 bearer_token = "my-agent.E7pK2..."
 \`\`\`
 
@@ -361,7 +361,7 @@ Point at the URL above with \`Authorization: Bearer <source>.<key>\`.
 ### 3. First call
 
 \`\`\`bash
-curl -X POST https://worktracker-prod-2026.web.app/mcp \\
+curl -X POST https://worktracker-nyx.web.app/mcp \\
   -H "Authorization: Bearer my-agent.E7pK2..." \\
   -H "Content-Type: application/json" \\
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
@@ -498,11 +498,11 @@ This page (\`/mcp.md\`) is served on \`GET\` and does not conflict with
 
 ## Source of truth
 
-- **This page:** https://worktracker-prod-2026.web.app/mcp.md
+- **This page:** https://worktracker-nyx.web.app/mcp.md
 - **README:** https://github.com/coding-nyx/worktracker (MCP section)
 - **Source code:** \`apps/api/src/mcp.ts\`, \`apps/api/src/auth.ts\`
 - **Deploy:** Cloud Run \`worktracker-api\` (us-central1), Firebase Hosting
-  \`worktracker-prod-2026\`
+  \`worktracker-nyx\`
 
 Generated from master. Edit \`MCP_DOC\` in \`apps/api/src/mcp.ts\` and
 redeploy to update this page.

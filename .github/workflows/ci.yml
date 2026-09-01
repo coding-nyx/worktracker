@@ -107,7 +107,7 @@ jobs:
   # own work_items and command docs, so prod stays tidy.
   #
   # Requires two secrets to be configured in the repo:
-  #   SMOKE_API_BASE   default https://worktracker-prod-2026.web.app
+  #   SMOKE_API_BASE   default https://worktracker-nyx.web.app
   #   SMOKE_ADMIN_TOKEN default worktracker-prod-2026-admin-token
   #   GCP_SA_KEY       service account with Firestore read+write,
   #                     only used for the dead-letter admin
