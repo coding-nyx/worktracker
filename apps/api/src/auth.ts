@@ -23,7 +23,7 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { SourceRegistration, WorktrackerUser } from '@worktracker/types';
+import type { ApiToken, ApiTokenScope, SourceRegistration, WorktrackerUser } from '@worktracker/types';
 import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import { getDb } from './firestore.js';
@@ -48,6 +48,17 @@ declare module 'fastify' {
       kind: 'admin' | 'source' | 'user';
       source?: SourceRegistration;
       user?: WorktrackerUser;
+      /**
+       * Effective permission scope of the caller. Set by
+       * `requireSource` for API tokens (`api_tokens` collection);
+       * for admin/user/legacy-source bearers it's implicit and
+       * resolved on demand by `getEffectiveScope`. The dispatch
+       * layer (`dispatchTool`) consults this to gate write and
+       * admin tools.
+       */
+      scope?: ApiTokenScope;
+      /** For API tokens, the underlying token record (id, owner_uid, scope). */
+      token?: { id: string; owner_uid: string; scope: ApiTokenScope };
     };
   }
 }
@@ -126,6 +137,25 @@ export async function requireSource(req: FastifyRequest, _reply: FastifyReply): 
       if (!user.enabled) throw new ForbiddenError('user disabled');
       req.auth = { kind: 'user', user };
       return;
+    }
+  }
+  // Personal API tokens: `wt_<tokenId>`. The tokenId is the
+  // doc id of the `api_tokens` collection, so lookup is O(1).
+  // Knowing the tokenId IS the credential — we don't store a
+  // hash because the random id already has 256 bits of entropy.
+  if (token.startsWith('wt_')) {
+    const tokenId = token.slice(3);
+    if (tokenId.length >= 16) {
+      const apiToken = await resolveApiTokenFromId(tokenId);
+      if (apiToken) {
+        req.auth = {
+          kind: 'source',
+          source: apiToken.source,
+          scope: apiToken.scope,
+          token: { id: tokenId, owner_uid: apiToken.owner_uid, scope: apiToken.scope },
+        };
+        return;
+      }
     }
   }
   const source = await resolveSourceFromToken(token);
@@ -285,4 +315,121 @@ async function verifyApiKey(plaintext: string, encoded: string): Promise<boolean
   const derived = await scryptAsync(plaintext, salt, SCRYPT_KEYLEN);
   // Constant-time comparison; same length enforced above.
   return timingSafeEqual(derived, expected);
+}
+
+// ----- API tokens (personal access tokens) -----
+
+/**
+ * Mint a new personal API token. The tokenId is a 32-byte
+ * base64url-encoded random string; the bearer is `wt_<tokenId>`.
+ * Knowing the tokenId IS the credential — we don't store a hash
+ * because the random id already has 256 bits of entropy (mirrors
+ * the Stripe / GitHub PAT model). The scope is set at mint time
+ * and enforced at the dispatch layer (`dispatchTool`).
+ */
+export interface MintedApiToken {
+  record: ApiToken;
+  bearer: string;
+}
+
+export async function mintApiToken(input: {
+  name: string;
+  owner_uid: string;
+  owner_email: string;
+  scope: ApiTokenScope;
+}): Promise<MintedApiToken> {
+  // 32 bytes -> 43 base64url chars (no padding). ULID would be 26
+  // chars and shorter to type, but a longer random id is the
+  // right defense-in-depth choice for a credential.
+  const tokenId = randomBytes(32).toString('base64url');
+  const bearer = `wt_${tokenId}`;
+  const now = nowIso();
+  const record: ApiToken = {
+    id: tokenId,
+    name: input.name,
+    owner_uid: input.owner_uid,
+    owner_email: input.owner_email,
+    scope: input.scope,
+    created_at: now,
+    last_used_at: null,
+    revoked_at: null,
+  };
+  await getDb().collection('api_tokens').doc(tokenId).set(record);
+  return { record, bearer };
+}
+
+/**
+ * Look up an API token by id. Returns null if the token doesn't
+ * exist or is revoked. On a successful hit, also updates
+ * `last_used_at` (best-effort, non-blocking) so the settings UI
+ * can show "last used" for each token.
+ */
+async function resolveApiTokenFromId(
+  tokenId: string,
+): Promise<{ source: SourceRegistration; scope: ApiTokenScope; owner_uid: string } | null> {
+  const ref = getDb().collection('api_tokens').doc(tokenId);
+  const snap = await ref.get();
+  if (!snap.exists) return null;
+  const data = snap.data() as ApiToken;
+  if (data.revoked_at) return null;
+  // Best-effort last-used touch. Don't await; a failed touch
+  // shouldn't block auth, and the read-after-write is fine
+  // because the read already succeeded.
+  void ref.set({ last_used_at: nowIso() }, { merge: true }).catch(() => undefined);
+  const source: SourceRegistration = {
+    name: `token:${data.name}`,
+    display_name: data.name,
+    kind: 'agent',
+    // The synthetic source inherits the token's owner for
+    // audit trails. The actual scope enforcement reads
+    // `req.auth.scope` (set by `requireSource`).
+    manifest: {
+      name: `token:${data.name}`,
+      display_name: data.name,
+      kind: 'agent',
+      capabilities: [],
+      version: '0.0.0',
+    },
+    capabilities: [],
+    webhook_secret: null,
+    enabled: true,
+    last_sync_at: null,
+    last_error: null,
+    created_at: data.created_at,
+    updated_at: data.created_at,
+  };
+  return { source, scope: data.scope, owner_uid: data.owner_uid };
+}
+
+/**
+ * Compute the caller's effective permission scope. Used by the
+ * dispatch layer to gate write and admin tools.
+ *
+ *   - Admin token or `req.auth.kind === 'admin'` -> 'admin'
+ *   - Firebase user with `is_admin: true`         -> 'admin'
+ *   - Synthetic 'web' source (React app)         -> 'admin'
+ *   - API token (req.auth.scope set)             -> token's scope
+ *   - Legacy source bearer (sources collection)  -> 'read_write'
+ *
+ * The last rule preserves back-compat: the existing per-source
+ * bearers (Claude Code, Codex, Hermes) keep the full read+write
+ * access they had before API tokens existed. New API tokens are
+ * the only callers that get the explicit downscoped behavior.
+ */
+export function getEffectiveScope(req: FastifyRequest): ApiTokenScope {
+  if (req.auth?.kind === 'admin') return 'admin';
+  if (req.auth?.source?.name === 'web') return 'admin';
+  if (req.auth?.user?.is_admin === true) return 'admin';
+  if (req.auth?.scope) return req.auth.scope;
+  return 'read_write';
+}
+
+const SCOPE_RANK: Record<ApiTokenScope, number> = {
+  read: 1,
+  read_write: 2,
+  admin: 3,
+};
+
+export function hasScopeAtLeast(req: FastifyRequest, required: ApiTokenScope): boolean {
+  return SCOPE_RANK[getEffectiveScope(req)] >= SCOPE_RANK[required];
 }

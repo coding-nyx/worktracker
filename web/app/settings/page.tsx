@@ -6,6 +6,7 @@ import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 
 import { useAuth } from '../../lib/auth';
 import { getFirebaseAuth } from '../../lib/firebase';
 import { Pill } from '../../components/Pill';
+import { ApiTokensSection } from '../../components/ApiTokensSection';
 
 /**
  * Personal settings for the signed-in user:
@@ -111,6 +112,8 @@ export default function SettingsPage() {
       </section>
 
       <ChangePasswordSection />
+
+      <ApiTokensSection />
 
       <section className="card space-y-3 p-5">
         <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-3">Session</h2>

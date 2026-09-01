@@ -612,3 +612,62 @@ export interface UpdateBoardRequest {
 export interface ListBoardsResponse {
   boards: Board[];
 }
+
+// =====================================================================
+// API tokens (personal access tokens for external MCP clients)
+// =====================================================================
+
+/**
+ * The permission scope of an API token. Enforced at the dispatch
+ * layer (`dispatchTool`) so a `read` token literally cannot call
+ * any write tool — the server returns an error before the brain
+ * ever sees the call.
+ *
+ * - `read`        — list/get tools only (items, boards)
+ * - `read_write`  — read + create/update/transition/comment/link
+ * - `admin`       — read+write + board admin (mintable by admins)
+ *
+ * Existing per-source bearers (the `sources/{name}` collection)
+ * keep the legacy `read_write` effective scope; their scope is
+ * implicit and not stored in the doc.
+ */
+export const API_TOKEN_SCOPES = ['read', 'read_write', 'admin'] as const;
+export type ApiTokenScope = (typeof API_TOKEN_SCOPES)[number];
+
+/**
+ * A personal API token. The bearer plaintext is
+ * `wt_<tokenId>`; only the document id (`tokenId`) is stored on
+ * the server, so knowing the bearer IS the credential (same model
+ * as Stripe / GitHub PATs). Server-side access only; the web app
+ * reads through the REST endpoint.
+ */
+export interface ApiToken {
+  /** ULID; also the document id and the lookup key. */
+  id: string;
+  /** User-provided label, e.g. "Claude Code laptop". */
+  name: string;
+  /** Firebase UID of the minting user. */
+  owner_uid: string;
+  /** Mirrored at mint-time for display; refreshes on owner change would be a future migration. */
+  owner_email: string;
+  scope: ApiTokenScope;
+  created_at: string;
+  last_used_at: string | null;
+  /** Soft delete; a revoked token still resolves to a doc but `requireSource` rejects it. */
+  revoked_at: string | null;
+}
+
+export interface ListApiTokensResponse {
+  tokens: ApiToken[];
+}
+
+export interface CreateApiTokenRequest {
+  name: string;
+  scope: ApiTokenScope;
+}
+
+export interface CreateApiTokenResponse {
+  token: ApiToken;
+  /** Plaintext bearer. Shown exactly once. */
+  bearer: string;
+}

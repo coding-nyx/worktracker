@@ -5,7 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -14,6 +14,7 @@ import {
   signInWithEmailAndPassword,
   signOut as fbSignOut,
   type User as FirebaseUser,
+  type Auth,
 } from 'firebase/auth';
 import type { WorktrackerUser } from '@worktracker/types';
 import { getFirebaseAuth } from './firebase';
@@ -51,7 +52,20 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const ID_TOKEN_REFRESH_LEAD_MS = 60_000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const auth = useMemo(() => getFirebaseAuth(), []);
+  // Hold a ref to the Auth instance instead of memoizing at
+  // render time. Initializing Firebase during render breaks
+  // SSR/SSG builds when env vars are missing — the SDK throws
+  // `auth/invalid-api-key` synchronously, which Next turns into
+  // a build error. We defer the init to a ref so the first
+  // render produces no Firebase calls; the ref fills in on
+  // mount (client only) and is reused thereafter. The callbacks
+  // (`signIn`, `signOut`, `getIdToken`) re-read the ref on
+  // every call so a ref populated post-render is picked up
+  // without a re-render.
+  const authRef = useRef<Auth | null>(null);
+  if (authRef.current === null && typeof window !== 'undefined') {
+    authRef.current = getFirebaseAuth();
+  }
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [worktrackerUser, setWorktrackerUser] = useState<WorktrackerUser | null>(null);
   const [isLoading, setLoading] = useState(true);
@@ -80,7 +94,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    const a = authRef.current ?? getFirebaseAuth();
+    authRef.current = a;
+    const unsub = onAuthStateChanged(a, async (u) => {
       setFirebaseUser(u);
       if (!u) {
         setWorktrackerUser(null);
@@ -96,24 +112,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
     return unsub;
-  }, [auth, refreshWorktrackerUser]);
+  }, [refreshWorktrackerUser]);
 
   const getIdToken = useCallback(async (): Promise<string | null> => {
-    const u = auth.currentUser;
+    const a = authRef.current ?? getFirebaseAuth();
+    const u = a.currentUser;
     if (!u) return null;
     return u.getIdToken();
-  }, [auth]);
+  }, []);
 
   const signIn = useCallback(
     async (email: string, password: string) => {
-      await signInWithEmailAndPassword(auth, email, password);
+      const a = authRef.current ?? getFirebaseAuth();
+      await signInWithEmailAndPassword(a, email, password);
     },
-    [auth],
+    [],
   );
 
   const signOut = useCallback(async () => {
-    await fbSignOut(auth);
-  }, [auth]);
+    const a = authRef.current ?? getFirebaseAuth();
+    await fbSignOut(a);
+  }, []);
 
   // Auto-refresh the worktracker user record on a long-lived
   // session so a promotion to admin propagates without a reload.

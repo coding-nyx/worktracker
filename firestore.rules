@@ -53,6 +53,18 @@ service cloud.firestore {
 
     // v0.5: reminders, notification_groups, notification_deliveries
     // are all server-only for now.
+
+    // API tokens: a user can read their own token list (for
+    // "show me my tokens / revoke" UX) but cannot read anyone
+    // else's. Writes are server-only — token mint/revoke flow
+    // through the REST API, which runs as the Admin SDK and
+    // bypasses these rules. The plaintext bearer is never
+    // returned by the list endpoint; only mint returns it.
+    match /api_tokens/{tokenId} {
+      allow read: if request.auth != null && resource.data.owner_uid == request.auth.uid;
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

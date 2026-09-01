@@ -10,14 +10,18 @@
  */
 
 import type {
+  ApiToken,
   Board,
   Command,
   CommandFailuresResponse,
   CreateSourceRequest,
   CreateSourceResponse,
   CreateBoardRequest,
+  CreateApiTokenRequest,
+  CreateApiTokenResponse,
   EnrichRequest,
   LinkRequest,
+  ListApiTokensResponse,
   ListItemsResponse,
   ListBoardsResponse,
   SourceRegistration,
@@ -180,4 +184,13 @@ export const api = {
       'POST',
       `/api/commands/${id}/replay`,
     ),
+
+  // Personal API tokens: mint, list, revoke. The bearer
+  // plaintext is only ever returned by `createToken`; the
+  // settings page surfaces it once and discards.
+  listApiTokens: () => request<ListApiTokensResponse>('GET', '/api/auth/tokens'),
+  createApiToken: (body: CreateApiTokenRequest) =>
+    request<CreateApiTokenResponse>('POST', '/api/auth/tokens', body),
+  revokeApiToken: (id: string) =>
+    request<{ token: ApiToken }>('DELETE', `/api/auth/tokens/${id}`),
 };

@@ -168,6 +168,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await authRoutes(app);
   const { adminUsersRoutes } = await import('./routes/admin-users.js');
   await adminUsersRoutes(app);
+  const { apiTokensRoutes } = await import('./routes/api-tokens.js');
+  await apiTokensRoutes(app);
   const { aiRoutes } = await import('./routes/ai.js');
   await aiRoutes(app);
   const { webhookRoutes } = await import('./routes/webhooks.js');

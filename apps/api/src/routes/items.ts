@@ -96,26 +96,31 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     if (query.status) ref = ref.where('status', '==', query.status);
     if (query.source) ref = ref.where('source', '==', query.source);
     if (query.owner) ref = ref.where('owner', '==', query.owner);
+    // Firestore's `where('archived_at', '==', null)` matches
+    // both null and missing fields, so the active-only filter
+    // is indexable and the limit isn't wasted on archived items.
+    // The previous post-fetch filter was correct in form but
+    // returned the full set whenever the limit was hit on
+    // archived items first.
+    if (!query.include_archived) {
+      ref = ref.where('archived_at', '==', null);
+    }
     if (query.cursor) {
       const cursorSnap = await getDb().collection('work_items').doc(query.cursor).get();
       if (cursorSnap.exists) ref = ref.startAfter(cursorSnap);
     }
     ref = ref.limit(query.limit);
     const snap = await ref.get();
-    const items: WorkItem[] = [];
-    for (const doc of snap.docs) {
-      const data = doc.data() as WorkItem;
-      if (!query.include_archived && data.archived_at) continue;
-      if (query.q) {
-        const needle = query.q.toLowerCase();
-        if (
-          !data.title.toLowerCase().includes(needle) &&
-          !(data.body?.toLowerCase().includes(needle) ?? false)
-        ) {
-          continue;
-        }
-      }
-      items.push(data);
+    let items: WorkItem[] = snap.docs.map((d) => d.data() as WorkItem);
+    // Text search is post-fetch (Firestore has no LIKE). The
+    // upstream `limit` caps the post-filter work.
+    if (query.q) {
+      const needle = query.q.toLowerCase();
+      items = items.filter(
+        (it) =>
+          it.title.toLowerCase().includes(needle) ||
+          (it.body?.toLowerCase().includes(needle) ?? false),
+      );
     }
     const response: ListItemsResponse = {
       items,

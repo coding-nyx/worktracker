@@ -20,7 +20,7 @@ import type {
 import { z } from 'zod';
 import { ulid, nowIso } from './ids.js';
 import { getDb } from './firestore.js';
-import { requireSource } from './auth.js';
+import { requireSource, hasScopeAtLeast } from './auth.js';
 import { InvalidInputError } from './errors.js';
 import { evaluateCommand as _evaluateCommand } from './brain.js';
 void _evaluateCommand; // reserved for the in-process evaluation path
@@ -666,26 +666,50 @@ export async function dispatchTool(
     return command;
   };
 
-  const isAdmin =
-    httpReq.auth?.source?.name === 'web' ||
-    httpReq.auth?.kind === 'admin' ||
-    httpReq.auth?.user?.is_admin === true;
+  const isAdmin = hasScopeAtLeast(httpReq, 'admin');
 
   try {
     switch (name) {
       case 'worktracker_list_items': {
+        // read scope (or better) — every API token, every legacy
+        // source bearer, every admin/user kind passes.
+        if (!hasScopeAtLeast(httpReq, 'read')) {
+          return { ok: false, error: 'list_items requires read scope', code: -32603 };
+        }
         const query = (args as unknown as ListItemsQuery) ?? {};
         let ref = getDb().collection('work_items').orderBy('updated_at', 'desc');
         if (query.kind) ref = ref.where('kind', '==', query.kind);
         if (query.status) ref = ref.where('status', '==', query.status);
         if (query.source) ref = ref.where('source', '==', query.source);
         if (query.owner) ref = ref.where('owner', '==', query.owner);
+        // Firestore's `where('archived_at', '==', null)` matches
+        // both null and missing fields, so the active-only filter
+        // is indexable and the limit isn't wasted on archived
+        // items. (An earlier version filtered post-fetch and
+        // returned the full set when most items were archived.)
+        if (!query.include_archived) {
+          ref = ref.where('archived_at', '==', null);
+        }
         ref = ref.limit(query.limit ?? 50);
         const snap = await ref.get();
-        const items = snap.docs.map((d) => d.data() as WorkItem);
+        let items: WorkItem[] = snap.docs.map((d) => d.data() as WorkItem);
+        // Text search is post-fetch because Firestore doesn't
+        // support LIKE; the upstream limit is 50/200 so the
+        // post-filter is bounded.
+        if (query.q) {
+          const needle = query.q.toLowerCase();
+          items = items.filter(
+            (it) =>
+              it.title.toLowerCase().includes(needle) ||
+              (it.body?.toLowerCase().includes(needle) ?? false),
+          );
+        }
         return { ok: true, value: { items } };
       }
       case 'worktracker_get_item': {
+        if (!hasScopeAtLeast(httpReq, 'read')) {
+          return { ok: false, error: 'get_item requires read scope', code: -32603 };
+        }
         const id = z.object({ id: z.string() }).parse(args).id;
         const doc = await getDb().collection('work_items').doc(id).get();
         if (!doc.exists) return { ok: true, value: { item: null } };
@@ -696,6 +720,9 @@ export async function dispatchTool(
         };
       }
       case 'worktracker_create_item': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'create_item requires read_write scope', code: -32603 };
+        }
         const payload = z
           .object({
             kind: z.enum(['task', 'ticket', 'decision', 'review']),
@@ -713,6 +740,9 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_update_item': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'update_item requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({
             id: z.string(),
@@ -727,6 +757,9 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_transition': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'transition requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({
             id: z.string(),
@@ -740,6 +773,9 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_comment': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'comment requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({ id: z.string(), body: z.string(), expected_version: z.number().optional() })
           .parse(args);
@@ -747,6 +783,9 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_link_items': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'link_items requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({
             parent_id: z.string(),
@@ -758,9 +797,13 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_set_reminder': {
+        // v0.5 stub. No scope check — always returns the same shape.
         return { ok: true, value: { accepted: false, reason: 'v0.5' } };
       }
       case 'worktracker_enrich': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'enrich requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({ id: z.string(), stage: z.enum(['grill', 'wayfind', 'both']), enricher: z.string().optional() })
           .parse(args) satisfies McpEnrichArgs;
@@ -768,6 +811,9 @@ export async function dispatchTool(
         return { ok: true, value: { command_id: command.id, status: 'queued' } };
       }
       case 'worktracker_dispatch': {
+        if (!hasScopeAtLeast(httpReq, 'read_write')) {
+          return { ok: false, error: 'dispatch requires read_write scope', code: -32603 };
+        }
         const args_ = z
           .object({
             id: z.string(),
@@ -794,11 +840,17 @@ export async function dispatchTool(
         return { ok: true, value: { job_id: jobId, status: 'enriching' } };
       }
       case 'worktracker_list_boards': {
+        if (!hasScopeAtLeast(httpReq, 'read')) {
+          return { ok: false, error: 'list_boards requires read scope', code: -32603 };
+        }
         const snap = await getDb().collection('boards').orderBy('name').get();
         const boards = snap.docs.map((d) => d.data() as Board);
         return { ok: true, value: { boards } };
       }
       case 'worktracker_get_board': {
+        if (!hasScopeAtLeast(httpReq, 'read')) {
+          return { ok: false, error: 'get_board requires read scope', code: -32603 };
+        }
         const id = z.object({ id: z.string() }).parse(args).id;
         const doc = await getDb().collection('boards').doc(id).get();
         if (!doc.exists) return { ok: true, value: { board: null } };
