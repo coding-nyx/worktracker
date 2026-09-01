@@ -158,8 +158,16 @@ function getFirebaseApp(): App {
     // We deliberately do NOT pass a cert — env-var-loaded certs
     // are easy to misconfigure (undefined fields create a broken
     // credential) and ADC just works.
+    //
+    // Pin the projectId explicitly. Without it, the SDK falls
+    // back to the credential's project_id, which in our case
+    // resolves to a stale "worktracker-local" project on Cloud
+    // Run when GCLOUD_PROJECT isn't set, and every Firestore
+    // call comes back PERMISSION_DENIED. Pinning to the
+    // configured projectId is the safe move.
     firebaseApp = initializeApp({
       credential: applicationDefault(),
+      projectId: loadConfig().projectId,
     });
   }
   return firebaseApp;
