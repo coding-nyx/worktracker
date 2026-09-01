@@ -35,6 +35,13 @@
         }
       },
       {
+        "source": "/mcp.md",
+        "run": {
+          "serviceId": "worktracker-api",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "/api/**",
         "run": {
           "serviceId": "worktracker-api",

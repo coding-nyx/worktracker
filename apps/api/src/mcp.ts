@@ -274,6 +274,240 @@ const TOOLS = [
   },
 ] as const;
 
+// ----- Discoverability doc (served on GET /mcp.md) -----
+//
+// A Markdown on-ramp for LLM agents (Claude Code, Codex, Hermes) so they
+// can be pointed at `https://worktracker-prod-2026.web.app/mcp.md` and
+// figure out how to connect + what tools exist, without first having
+// the connection wired up in a config file. The doc is public — auth
+// is only enforced on POST /mcp.
+
+const MCP_DOC = `# MCP for WorkTracker
+
+A source-authenticated JSON-RPC 2.0 surface for the WorkTracker kanban.
+Any MCP client (Claude Code, Codex, Hermes, custom GPTs) can read kanban
+state, mutate work items, and manage boards through a single HTTP endpoint.
+
+- **Server URL:** \`https://worktracker-prod-2026.web.app/mcp\`
+- **Protocol:** JSON-RPC 2.0 over HTTP
+- **Transport:** Request/response in v0 (SSE endpoint is registered but
+  does not yet push events)
+- **Auth:** Bearer token per source, or the \`WORKTRACKER_ADMIN_TOKEN\`
+- **Tools:** 15 (\`worktracker_*\`)
+
+This page is the on-ramp. Fetch it with \`curl\` or point an LLM at it.
+The canonical doc is also on GitHub at
+\`github.com/coding-nyx/worktracker\` (see the MCP section in the README).
+
+---
+
+## Quick start
+
+### 1. Add a source (admin)
+
+A source is a named API client. The admin creates it; the API returns a
+\`<source>.<key>\` bearer. The server stores the key as a scrypt hash;
+the plaintext is shown once.
+
+\`\`\`bash
+curl -X POST https://worktracker-prod-2026.web.app/api/sources \\
+  -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"my-agent","kind":"external"}'
+\`\`\`
+
+Response (example):
+
+\`\`\`json
+{
+  "name": "my-agent",
+  "kind": "external",
+  "bearer": "my-agent.E7pK2..."
+}
+\`\`\`
+
+Treat \`bearer\` like a password.
+
+### 2. Wire the source into your MCP client
+
+#### Claude Code (\`.mcp.json\` in project root, or \`~/.claude.json\`)
+
+\`\`\`json
+{
+  "mcpServers": {
+    "worktracker": {
+      "type": "http",
+      "url": "https://worktracker-prod-2026.web.app/mcp",
+      "headers": {
+        "Authorization": "Bearer my-agent.E7pK2..."
+      }
+    }
+  }
+}
+\`\`\`
+
+#### Codex CLI (\`~/.codex/config.toml\`)
+
+\`\`\`toml
+[mcp_servers.worktracker]
+url = "https://worktracker-prod-2026.web.app/mcp"
+bearer_token = "my-agent.E7pK2..."
+\`\`\`
+
+#### Hermes / generic HTTP MCP client
+
+Point at the URL above with \`Authorization: Bearer <source>.<key>\`.
+
+### 3. First call
+
+\`\`\`bash
+curl -X POST https://worktracker-prod-2026.web.app/mcp \\
+  -H "Authorization: Bearer my-agent.E7pK2..." \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+\`\`\`
+
+Response:
+
+\`\`\`json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "protocolVersion": "2024-11-05",
+    "serverInfo": { "name": "worktracker", "version": "0.1.0" },
+    "capabilities": { "tools": {} }
+  }
+}
+\`\`\`
+
+Then list the tools and call one:
+
+\`\`\`json
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+\`\`\`
+
+\`\`\`json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
+  "name":"worktracker_list_items",
+  "arguments":{"limit":10}
+}}
+\`\`\`
+
+---
+
+## Auth model
+
+Two paths through \`requireSource\`:
+
+1. **Admin token.** \`WORKTRACKER_ADMIN_TOKEN\`. Sets
+   \`req.auth = { kind: 'admin' }\`. Bypasses the sources collection.
+2. **Source bearer.** Scrypt-hashed at registration. Tokens shaped
+   \`<source>.<key>\` get an O(1) lookup against \`sources/{name}\`. Other
+   shapes iterate the collection. Verified with \`timingSafeEqual\`.
+
+A source with \`enabled: false\` returns \`403\`.
+
+The three board admin tools
+(\`worktracker_create_board\`, \`worktracker_update_board\`,
+\`worktracker_delete_board\`) require either:
+
+- \`req.auth.kind === 'admin'\`, or
+- \`req.auth.source.name === 'web'\` (the React app's virtual admin path)
+
+All other tools accept any enabled source.
+
+---
+
+## Tools (15)
+
+### Work items (10)
+
+| Tool | Auth | Purpose |
+| --- | --- | --- |
+| \`worktracker_list_items\`    | any source | List items, optional filters (kind, status, source, owner, q, limit, include_archived) |
+| \`worktracker_get_item\`      | any source | One item + its \`events\` subcollection |
+| \`worktracker_create_item\`   | any source | Enqueue a \`create\` command; returns \`command_id\` |
+| \`worktracker_update_item\`   | any source | Enqueue an \`update\` command (optimistic concurrency) |
+| \`worktracker_transition\`    | any source | Enqueue a \`transition\` command |
+| \`worktracker_comment\`       | any source | Append a comment event |
+| \`worktracker_link_items\`    | any source | Link two items with \`depends_on | blocks | related | mirrors | parent_of\` |
+| \`worktracker_set_reminder\`  | any source | v0.5 stub: returns \`{ accepted: false, reason: "v0.5" }\` |
+| \`worktracker_enrich\`        | any source | Enqueue \`grill | wayfind | both\` |
+| \`worktracker_dispatch\`      | any source | Pre-flight + missing enrichment + transition (heaviest single tool) |
+
+### Boards (5)
+
+| Tool | Auth | Purpose |
+| --- | --- | --- |
+| \`worktracker_list_boards\`   | any source | All boards, ordered by name |
+| \`worktracker_get_board\`     | any source | One board by id |
+| \`worktracker_create_board\`  | admin      | Create; \`is_default: true\` unsets the previous default first |
+| \`worktracker_update_board\`  | admin      | Patch fields; re-assigning default unsets the previous |
+| \`worktracker_delete_board\`  | admin      | Delete by id; default board returns \`cannot_delete_default\` |
+
+### Cost profile
+
+Reads are one Firestore query. Writes enqueue a command and return a
+\`command_id\` immediately; the Brain Cloud Function applies the change
+in the background. \`worktracker_dispatch\` is the heaviest single tool —
+pre-flight, missing enrichment, and transition in one call.
+
+\`worktracker_get_item\` is two reads: the document and its
+\`events\` subcollection.
+
+---
+
+## Errors
+
+JSON-RPC error envelope:
+
+\`\`\`json
+{ "jsonrpc": "2.0", "id": <echoed>, "error": { "code": -32601, "message": "..." } }
+\`\`\`
+
+| Code | Meaning | Cause |
+| --- | --- | --- |
+| \`-32600\` | Invalid Request   | \`jsonrpc\` ≠ \`"2.0"\` or envelope malformed |
+| \`-32601\` | Method not found  | Unknown \`method\` or \`tools/call\` name |
+| \`-32602\` | Invalid params    | zod schema rejects the args; \`data\` carries the field path |
+| \`-32603\` | Internal error    | Unexpected throw, or admin-only tool called by a non-admin source |
+
+HTTP transport errors (returned before the body is parsed):
+
+| Status | Meaning | Cause |
+| --- | --- | --- |
+| \`401\` | Unauthorized      | Missing bearer, or bearer doesn't match any source / admin token |
+| \`403\` | Forbidden         | Source exists but \`enabled: false\` |
+| \`404\` | Not found         | Path is not \`/mcp\` on the Cloud Run service |
+| \`405\` | Method not allowed | \`GET /mcp\` — POST a JSON-RPC envelope instead |
+
+---
+
+## Endpoint aliasing
+
+The server mounts the JSON-RPC handler at both \`/mcp\` and \`/api/mcp\`.
+The internal REST API lives at \`/api/**\`. Firebase Hosting's
+\`run\` rewrite forwards the literal path to Cloud Run, so both routes
+resolve to the same handler with the same auth.
+
+This page (\`/mcp.md\`) is served on \`GET\` and does not conflict with
+\`POST /mcp\`.
+
+---
+
+## Source of truth
+
+- **This page:** https://worktracker-prod-2026.web.app/mcp.md
+- **README:** https://github.com/coding-nyx/worktracker (MCP section)
+- **Source code:** \`apps/api/src/mcp.ts\`, \`apps/api/src/auth.ts\`
+- **Deploy:** Cloud Run \`worktracker-api\` (us-central1), Firebase Hosting
+  \`worktracker-prod-2026\`
+
+Generated from master. Edit \`MCP_DOC\` in \`apps/api/src/mcp.ts\` and
+redeploy to update this page.
+`;
+
 // ----- Router -----
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
@@ -295,6 +529,15 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   };
   app.get('/api/mcp', { preHandler: requireSource }, getHandler);
   app.get('/mcp', { preHandler: requireSource }, getHandler);
+
+  // Public Markdown on-ramp. No auth — this is the page an LLM
+  // agent reads to learn how to connect. A new Firebase Hosting
+  // rewrite (`/mcp.md` → Cloud Run) routes GET requests here; the
+  // POST JSON-RPC handler below still owns the same prefix.
+  app.get('/mcp.md', async (_req, reply) => {
+    reply.type('text/markdown; charset=utf-8');
+    reply.send(MCP_DOC);
+  });
 
   // JSON-RPC 2.0 over HTTP (per MCP spec, accepts a single
   // request or a batch).
