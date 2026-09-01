@@ -24,7 +24,7 @@ import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { SourceRegistration, WorktrackerUser } from '@worktracker/types';
-import { cert, getApp, initializeApp, type App } from 'firebase-admin/app';
+import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import { getDb } from './firestore.js';
 import { ForbiddenError, UnauthorizedError } from './errors.js';
@@ -152,18 +152,14 @@ function getFirebaseApp(): App {
   try {
     firebaseApp = getApp();
   } catch {
-    // Application Default Credentials on Cloud Run: the service
-    // account is auto-discovered. Locally, `gcloud auth
-    // application-default login` provides the credentials.
+    // Application Default Credentials: on Cloud Run the service
+    // account is auto-discovered via the metadata server; locally,
+    // `gcloud auth application-default login` provides the same.
+    // We deliberately do NOT pass a cert — env-var-loaded certs
+    // are easy to misconfigure (undefined fields create a broken
+    // credential) and ADC just works.
     firebaseApp = initializeApp({
-      credential: cert({
-        // On Cloud Run these are wired by the runtime via metadata
-        // server; passing the same project as the rest of the
-        // deployment keeps everything consistent.
-        projectId: loadConfig().projectId,
-        clientEmail: process.env.FIREBASE_ADMIN_CLIENT_EMAIL,
-        privateKey: process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-      } as Parameters<typeof cert>[0]),
+      credential: applicationDefault(),
     });
   }
   return firebaseApp;
