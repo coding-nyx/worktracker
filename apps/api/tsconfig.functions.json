@@ -1,0 +1,34 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "outDir": "./lib",
+    "rootDir": "./src",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": [
+    "src/index.ts",
+    "src/functions.ts",
+    "src/brain.ts",
+    "src/firestore.ts",
+    "src/ids.ts",
+    "src/errors.ts",
+    "src/repo.ts",
+    "src/auth.ts",
+    "src/config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "lib",
+    "tests",
+    "src/app.ts",
+    "src/mcp.ts",
+    "src/mcp-v2.ts",
+    "src/routes/**",
+    "src/connectors/**",
+    "src/ai/**"
+  ]
+}

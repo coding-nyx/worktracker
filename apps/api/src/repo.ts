@@ -267,14 +267,134 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
       tx.set(itemRef.collection('events').doc(event.id), event);
       return { item: next, event };
     }
-    case 'link':
+    case 'link': {
+      // The brain writes a relational row to `item_links/{linkId}`
+      // and appends a `linked` event on BOTH items (parent and
+      // child). Links are stored in a top-level collection rather
+      // than as a field on WorkItem so a single item can have many
+      // links of different kinds (depends_on, blocks, related,
+      // mirrors, parent_of) without overwriting each other.
+      const childId = (command.payload as { child_id: string }).child_id;
+      const linkKind = (command.payload as { kind: string }).kind;
+      const childRef = db.collection('work_items').doc(childId);
+      const childSnap = await tx.get(childRef);
+      if (!childSnap.exists) {
+        throw new NotFoundError(`link child work item ${childId} not found`);
+      }
+      const now = nowIso();
+      const linkId = ulid();
+      const linkDoc = {
+        id: linkId,
+        parent_id: command.item_id,
+        child_id: childId,
+        kind: linkKind,
+        source: command.source,
+        source_event_id: command.source_event_id,
+        command_id: command.id,
+        created_at: now,
+      };
+      tx.set(db.collection('item_links').doc(linkId), linkDoc);
+      // Parent event. Returned as `event` so `markApplied` can
+      // record it as `applied_event_id` on the command.
+      const parentEvent: WorkItemEvent = {
+        id: ulid(),
+        item_id: current.id,
+        kind: 'linked',
+        actor,
+        body: null,
+        from_status: null,
+        to_status: null,
+        field: 'links',
+        from_value: null,
+        to_value: { link_id: linkId, child_id: childId, kind: linkKind },
+        command_id: command.id,
+        source_event_id: command.source_event_id,
+        enrichment_stage: null,
+        created_at: now,
+      };
+      tx.set(itemRef.collection('events').doc(parentEvent.id), parentEvent);
+      // Child event — same link, mirrored on the child's timeline.
+      // Written in the same transaction so a brain retry is atomic.
+      const childEvent: WorkItemEvent = {
+        id: ulid(),
+        item_id: childId,
+        kind: 'linked',
+        actor,
+        body: null,
+        from_status: null,
+        to_status: null,
+        field: 'links',
+        from_value: null,
+        to_value: { link_id: linkId, parent_id: current.id, kind: linkKind },
+        command_id: command.id,
+        source_event_id: command.source_event_id,
+        enrichment_stage: null,
+        created_at: now,
+      };
+      tx.set(childRef.collection('events').doc(childEvent.id), childEvent);
+      return { item: current, event: parentEvent };
+    }
     case 'unlink': {
-      // The brain handles link commands by writing to
-      // `item_links/{linkId}` (a top-level collection). This
-      // branch should not normally be reached by applyCommand —
-      // links don't mutate the work_items doc. Return null to
-      // signal no work-item change.
-      return null;
+      // Match by (parent_id, child_id, kind) — that's the smallest
+      // identifying tuple carried in the command payload. The
+      // schema doesn't include a `link_id` field because most
+      // callers don't see one (links are server-generated ULIDs).
+      // If multiple matching links exist (theoretically possible
+      // if a caller submitted the same link twice), we delete all
+      // and write one `unlinked` event for the soft-delete.
+      const childId = (command.payload as { child_id: string }).child_id;
+      const linkKind = (command.payload as { kind: string }).kind;
+      const matches = await tx.get(
+        db.collection('item_links')
+          .where('parent_id', '==', command.item_id)
+          .where('child_id', '==', childId)
+          .where('kind', '==', linkKind),
+      );
+      if (matches.empty) {
+        // No-op idempotent — there was no link to remove.
+        return null;
+      }
+      const now = nowIso();
+      const parentRef = itemRef;
+      const childRef = db.collection('work_items').doc(childId);
+      const parentEvent: WorkItemEvent = {
+        id: ulid(),
+        item_id: current.id,
+        kind: 'unlinked',
+        actor,
+        body: null,
+        from_status: null,
+        to_status: null,
+        field: 'links',
+        from_value: null,
+        to_value: { child_id: childId, kind: linkKind, removed_count: matches.size },
+        command_id: command.id,
+        source_event_id: command.source_event_id,
+        enrichment_stage: null,
+        created_at: now,
+      };
+      tx.set(parentRef.collection('events').doc(parentEvent.id), parentEvent);
+      for (const doc of matches.docs) {
+        tx.delete(doc.ref);
+      }
+      const childEvent: WorkItemEvent = {
+        id: ulid(),
+        item_id: childId,
+        kind: 'unlinked',
+        actor,
+        body: null,
+        from_status: null,
+        to_status: null,
+        field: 'links',
+        from_value: null,
+        to_value: { parent_id: current.id, kind: linkKind, removed_count: matches.size },
+        command_id: command.id,
+        source_event_id: command.source_event_id,
+        enrichment_stage: null,
+        created_at: now,
+      };
+      tx.set(childRef.collection('events').doc(childEvent.id), childEvent);
+      return { item: current, event: parentEvent };
     }
   }
 }

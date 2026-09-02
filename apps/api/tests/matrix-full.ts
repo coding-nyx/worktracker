@@ -202,6 +202,24 @@ test('write: link_items (hermes)', async () => {
     parent_id: ia.id, child_id: ib.id, kind: 'related',
   });
   assert.equal(r.http, 200, `link_items: ${short(r)}`);
+  // Wait for brain to apply the link, then verify a `linked` event
+  // shows up on BOTH items (parent + child). This is the bug that
+  // was hidden by the stub `return null` — the command returned
+  // `applied` but no event was ever written.
+  await new Promise(r => setTimeout(r, 1500));
+  const parent = await call(HERMES, 'worktracker_get_item', { id: ia.id });
+  const child = await call(HERMES, 'worktracker_get_item', { id: ib.id });
+  // get_item returns the raw shape { item, events } under
+  // `result` (not wrapped in structuredContent). The unwrap helper
+  // wraps raw shapes as {ok: true, value: <result>}, so dig two
+  // levels deep.
+  const unwrap = (r: any) => r.body?.value ?? r.body;
+  const p = unwrap(parent);
+  const c = unwrap(child);
+  const pEvents = p.events ?? p.item?.events ?? [];
+  const cEvents = c.events ?? c.item?.events ?? [];
+  assert.ok(pEvents.some((e: any) => e.kind === 'linked'), `parent item has no 'linked' event: ${short(parent)}`);
+  assert.ok(cEvents.some((e: any) => e.kind === 'linked'), `child item has no 'linked' event: ${short(child)}`);
   tested.push('link_items');
 });
 
