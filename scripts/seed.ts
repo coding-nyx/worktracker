@@ -1,6 +1,6 @@
 /**
  * Local seed: populates the Firestore emulator with a small set
- * of sources, work items, and events. Run with:
+ * of clients, work items, and events. Run with:
  *
  *   FIRESTORE_EMULATOR_HOST=localhost:8080 \
  *   GCLOUD_PROJECT=worktracker-local \
@@ -9,6 +9,12 @@
  * Uses the Firestore REST API (the v1 endpoint) directly so we
  * don't need any credentials — the emulator accepts any project
  * ID and skips auth.
+ *
+ * Slice 2: every client is written with an explicit `scope` so
+ * `getEffectiveScope` resolves deterministically. The old
+ * `adminSources` allowlist is gone — the only admin path is
+ * WORKTRACKER_ADMIN_TOKEN, plus any client doc with
+ * `scope: 'admin'`.
  */
 
 import bcrypt from 'bcryptjs';
@@ -64,38 +70,55 @@ function toFirestoreValue(v: unknown): FirestoreValue {
 const now = () => new Date().toISOString();
 const id = () => Date.now().toString(36) + randomBytes(4).toString('hex');
 
-async function seedSource(name: string, displayName: string, kind: 'agent' | 'human' | 'system' | 'webhook', capabilities: string[]): Promise<string> {
+type ClientKind = 'agent' | 'user';
+type ApiTokenScope = 'read' | 'read_write' | 'admin';
+
+/**
+ * Seed a single agent client. Slice 2: the `scope` field is
+ * written explicitly; `getEffectiveScope` reads it and gates
+ * MCP tool visibility. Default scope is `read_write`; pass
+ * `admin` for clients that need board admin tools.
+ */
+async function seedClient(input: {
+  name: string;
+  displayName: string;
+  capabilities: string[];
+  scope: ApiTokenScope;
+}): Promise<string> {
   const apiKey = randomBytes(24).toString('base64url');
   const hash = await bcrypt.hash(apiKey, 8);
   const manifest = {
-    name,
-    display_name: displayName,
-    kind,
-    capabilities,
+    name: input.name,
+    display_name: input.displayName,
+    kind: 'agent' as ClientKind,
+    capabilities: input.capabilities,
     webhook_url: null,
     icon: null,
     version: '1.0.0',
   };
   const ts = now();
-  await fy(`/sources/${name}`, {
+  await fy(`/sources/${input.name}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(fyDoc({
-      name,
-      display_name: displayName,
-      kind,
+      name: input.name,
+      display_name: input.displayName,
+      kind: 'agent' as ClientKind,
+      scope: input.scope,
+      owner_uid: null,
       manifest,
-      capabilities,
+      capabilities: input.capabilities,
       api_key_hash: hash,
       webhook_secret: null,
       enabled: true,
-      last_sync_at: ts,
-      last_error: null,
       created_at: ts,
       updated_at: ts,
+      last_used_at: null,
+      rotated_at: null,
+      revoked_at: null,
     })),
   });
-  console.log(`  ✓ source "${name}" created (api_key: ${apiKey})`);
+  console.log(`  ✓ client "${input.name}" created (scope: ${input.scope}, api_key: ${apiKey})`);
   return apiKey;
 }
 
@@ -165,26 +188,50 @@ async function seedItem(partial: {
 async function main(): Promise<void> {
   console.log('Seeding WorkTracker local Firestore…');
 
-  // 1. Sources.
-  const hermesKey = await seedSource('hermes', 'Hermes', 'agent', [
-    'create',
-    'update',
-    'transition',
-    'comment',
-    'link',
-  ]);
-  await seedSource('mavis', 'Mavis / Claude Code', 'agent', [
-    'create',
-    'update',
-    'transition',
-    'comment',
-    'link',
-    'enrich:grill',
-    'enrich:wayfind',
-  ]);
-  await seedSource('codex', 'Codex CLI', 'agent', ['create', 'update', 'transition', 'comment']);
-  await seedSource('cline', 'Cline', 'agent', ['create', 'update', 'transition', 'comment']);
-  await seedSource('web', 'WorkTracker Web UI', 'system', ['create', 'update', 'transition', 'comment', 'link']);
+  // 1. Clients (slice 2). Scope is explicit. Admin scope is reserved
+  // for the operator; agent clients get read_write by default; a
+  // single test client gets `read` to exercise the read-only path.
+  const hermesKey = await seedClient({
+    name: 'hermes',
+    displayName: 'Hermes',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'mavis',
+    displayName: 'Mavis / Claude Code',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link', 'enrich:grill', 'enrich:wayfind'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'codex',
+    displayName: 'Codex CLI',
+    capabilities: ['create', 'update', 'transition', 'comment'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'cline',
+    displayName: 'Cline',
+    capabilities: ['create', 'update', 'transition', 'comment'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'web',
+    displayName: 'WorkTracker Web UI',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link'],
+    // The web UI is a logged-in Firebase user, but the legacy
+    // `web` source still shows up in dashboards and event actors.
+    // The web UI itself authenticates with a Firebase ID token,
+    // not this bearer; the scope just keeps the legacy record
+    // consistent.
+    scope: 'admin',
+  });
+  await seedClient({
+    name: 'read-only-test',
+    displayName: 'Read-only test client',
+    capabilities: [],
+    scope: 'read',
+  });
 
   // 2. Work items.
   const today = new Date();

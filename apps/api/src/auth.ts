@@ -23,7 +23,7 @@
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { ApiToken, ApiTokenScope, SourceRegistration, WorktrackerUser } from '@worktracker/types';
+import type { ApiTokenScope, Client, WorktrackerUser } from '@worktracker/types';
 import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import { getDb } from './firestore.js';
@@ -46,18 +46,19 @@ declare module 'fastify' {
   interface FastifyRequest {
     auth?: {
       kind: 'admin' | 'source' | 'user';
-      source?: SourceRegistration;
+      source?: Client;
       user?: WorktrackerUser;
       /**
        * Effective permission scope of the caller. Set by
-       * `requireSource` for API tokens (`api_tokens` collection);
-       * for admin/user/legacy-source bearers it's implicit and
+       * `requireSource` for `kind: 'user'` clients (personal
+       * access tokens, stored at `sources/{bearer_id}`); for
+       * admin/user/legacy-source bearers it's implicit and
        * resolved on demand by `getEffectiveScope`. The dispatch
        * layer (`dispatchTool`) consults this to gate write and
        * admin tools.
        */
       scope?: ApiTokenScope;
-      /** For API tokens, the underlying token record (id, owner_uid, scope). */
+      /** For `kind: 'user'` clients, the bearer_id (doc id) + owner_uid + scope. */
       token?: { id: string; owner_uid: string; scope: ApiTokenScope };
     };
   }
@@ -132,9 +133,9 @@ export async function requireSource(req: FastifyRequest, _reply: FastifyReply): 
       return;
     }
   }
-  // Personal API tokens: `wt_<tokenId>`. The tokenId is the
-  // doc id of the `api_tokens` collection, so lookup is O(1).
-  // Knowing the tokenId IS the credential — we don't store a
+  // Personal clients: `wt_<bearerId>`. The bearerId is the
+  // doc id of the `sources` collection, so lookup is O(1).
+  // Knowing the bearerId IS the credential — we don't store a
   // hash because the random id already has 256 bits of entropy.
   if (token.startsWith('wt_')) {
     const tokenId = token.slice(3);
@@ -261,7 +262,7 @@ async function upsertUserFromDecoded(decoded: DecodedIdToken): Promise<Worktrack
   return user;
 }
 
-async function resolveSourceFromToken(token: string): Promise<SourceRegistration | null> {
+async function resolveSourceFromToken(token: string): Promise<Client | null> {
   // Optimistic fast path: the token has the form `<source>.<key>`.
   const dot = token.indexOf('.');
   if (dot > 0) {
@@ -270,7 +271,7 @@ async function resolveSourceFromToken(token: string): Promise<SourceRegistration
     const db = getDb();
     const doc = await db.collection('sources').doc(name).get();
     if (!doc.exists) return null;
-    const data = doc.data() as SourceRegistration;
+    const data = doc.data() as Client;
     if (data.api_key_hash && (await verifyApiKey(plaintext, data.api_key_hash))) {
       return data;
     }
@@ -279,7 +280,7 @@ async function resolveSourceFromToken(token: string): Promise<SourceRegistration
   const db = getDb();
   const snap = await db.collection('sources').get();
   for (const doc of snap.docs) {
-    const data = doc.data() as SourceRegistration;
+    const data = doc.data() as Client;
     if (data.api_key_hash && (await verifyApiKey(token, data.api_key_hash))) {
       return data;
     }
@@ -313,90 +314,131 @@ async function verifyApiKey(plaintext: string, encoded: string): Promise<boolean
 // ----- API tokens (personal access tokens) -----
 
 /**
- * Mint a new personal API token. The tokenId is a 32-byte
- * base64url-encoded random string; the bearer is `wt_<tokenId>`.
- * Knowing the tokenId IS the credential — we don't store a hash
- * because the random id already has 256 bits of entropy (mirrors
- * the Stripe / GitHub PAT model). The scope is set at mint time
- * and enforced at the dispatch layer (`dispatchTool`).
+ * Mint a new personal `kind: 'user'` client. Slice 2: this
+ * replaces `mintApiToken`. The bearer_id is a 32-byte
+ * base64url-encoded random string; the bearer is `wt_<bearer_id>`;
+ * the doc id is the bearer_id (so lookup is O(1)). Knowing the
+ * bearer_id IS the credential — no hash is stored.
  */
-export interface MintedApiToken {
-  record: ApiToken;
+export interface MintedClient {
+  record: Client;
   bearer: string;
 }
 
-export async function mintApiToken(input: {
+export async function mintUserClient(input: {
   name: string;
   owner_uid: string;
   owner_email: string;
   scope: ApiTokenScope;
-}): Promise<MintedApiToken> {
-  // 32 bytes -> 43 base64url chars (no padding). ULID would be 26
-  // chars and shorter to type, but a longer random id is the
-  // right defense-in-depth choice for a credential.
-  const tokenId = randomBytes(32).toString('base64url');
-  const bearer = `wt_${tokenId}`;
+}): Promise<MintedClient> {
+  const bearerId = randomBytes(32).toString('base64url');
+  const bearer = `wt_${bearerId}`;
   const now = nowIso();
-  const record: ApiToken = {
-    id: tokenId,
-    name: input.name,
+  const record: Client = {
+    name: bearerId,
+    display_name: input.name,
+    kind: 'user',
+    scope: input.scope,
     owner_uid: input.owner_uid,
     owner_email: input.owner_email,
-    scope: input.scope,
-    created_at: now,
-    last_used_at: null,
-    revoked_at: null,
-  };
-  await getDb().collection('api_tokens').doc(tokenId).set(record);
-  return { record, bearer };
-}
-
-/**
- * Look up an API token by id. Returns null if the token doesn't
- * exist or is revoked. On a successful hit, also updates
- * `last_used_at` (best-effort, non-blocking) so the settings UI
- * can show "last used" for each token.
- */
-async function resolveApiTokenFromId(
-  tokenId: string,
-): Promise<{ source: SourceRegistration; scope: ApiTokenScope; owner_uid: string } | null> {
-  const ref = getDb().collection('api_tokens').doc(tokenId);
-  const snap = await ref.get();
-  if (!snap.exists) return null;
-  const data = snap.data() as ApiToken;
-  if (data.revoked_at) return null;
-  // Best-effort last-used touch. Don't await; a failed touch
-  // shouldn't block auth, and the read-after-write is fine
-  // because the read already succeeded.
-  void ref.set({ last_used_at: nowIso() }, { merge: true }).catch(() => undefined);
-  const source: SourceRegistration = {
-    name: `token:${data.name}`,
-    display_name: data.name,
-    kind: 'agent',
-    // Slice 1: the synthetic source carries the token's scope
-    // so `getEffectiveScope` reads it through `source.scope` even
-    // when `req.auth.scope` is also set (which it is, redundantly
-    // — defense in depth).
-    scope: data.scope,
-    // The synthetic source inherits the token's owner for
-    // audit trails. The actual scope enforcement reads
-    // `req.auth.scope` (set by `requireSource`).
     manifest: {
-      name: `token:${data.name}`,
-      display_name: data.name,
-      kind: 'agent',
+      name: bearerId,
+      display_name: input.name,
+      kind: 'user',
       capabilities: [],
       version: '0.0.0',
     },
     capabilities: [],
     webhook_secret: null,
     enabled: true,
-    last_sync_at: null,
-    last_error: null,
-    created_at: data.created_at,
-    updated_at: data.created_at,
+    created_at: now,
+    updated_at: now,
+    last_used_at: null,
+    rotated_at: null,
+    revoked_at: null,
+    bearer_id: bearerId,
   };
-  return { source, scope: data.scope, owner_uid: data.owner_uid };
+  await getDb().collection('sources').doc(bearerId).set(record);
+  return { record, bearer };
+}
+
+/**
+ * Rotate a personal `kind: 'user'` client's bearer. Generates a
+ * fresh `bearer_id`, writes the new record, and returns the new
+ * plaintext bearer. The old bearer is invalidated immediately
+ * (the doc id changes; the old id no longer resolves).
+ */
+export async function rotateUserClient(input: {
+  name: string;
+  owner_uid: string;
+  owner_email: string;
+  scope: ApiTokenScope;
+  old_bearer_id: string;
+}): Promise<MintedClient> {
+  const newBearerId = randomBytes(32).toString('base64url');
+  const newBearer = `wt_${newBearerId}`;
+  const now = nowIso();
+  // Read the old record to copy display_name and other immutable fields.
+  const oldRef = getDb().collection('sources').doc(input.old_bearer_id);
+  const oldSnap = await oldRef.get();
+  const old = oldSnap.exists ? (oldSnap.data() as Client) : null;
+  const record: Client = {
+    name: newBearerId,
+    display_name: input.name,
+    kind: 'user',
+    scope: input.scope,
+    owner_uid: input.owner_uid,
+    owner_email: input.owner_email,
+    manifest: {
+      name: newBearerId,
+      display_name: input.name,
+      kind: 'user',
+      capabilities: old?.capabilities ?? [],
+      version: '0.0.0',
+    },
+    capabilities: old?.capabilities ?? [],
+    webhook_secret: null,
+    enabled: true,
+    created_at: old?.created_at ?? now,
+    updated_at: now,
+    last_used_at: null,
+    rotated_at: now,
+    revoked_at: null,
+    bearer_id: newBearerId,
+  };
+  // Write the new doc, then revoke + delete the old. The delete
+  // is best-effort: even if it fails, the old bearer_id doesn't
+  // resolve to the new doc.
+  await getDb().collection('sources').doc(newBearerId).set(record);
+  await oldRef.set({ revoked_at: now, updated_at: now }, { merge: true });
+  return { record, bearer: newBearer };
+}
+
+/**
+ * Look up a personal client by bearer_id. The bearer is
+ * `wt_<bearer_id>`; the doc id is the bearer_id. Returns null if
+ * the client doesn't exist, is disabled, or is revoked.
+ *
+ * Slice 2: the `api_tokens` collection is gone. Personal access
+ * tokens are `clients/{bearer_id}` rows with `kind: 'user'`.
+ * The doc shape is the full `Client` record, so the lookup
+ * returns the row directly (no synthetic source object).
+ */
+async function resolveApiTokenFromId(
+  tokenId: string,
+): Promise<{ source: Client; scope: ApiTokenScope; owner_uid: string } | null> {
+  const ref = getDb().collection('sources').doc(tokenId);
+  const snap = await ref.get();
+  if (!snap.exists) return null;
+  const data = snap.data() as Client;
+  if (data.kind !== 'user') return null;
+  if (!data.enabled) return null;
+  if (data.revoked_at) return null;
+  // Best-effort last-used touch. Don't await; a failed touch
+  // shouldn't block auth, and the read-after-write is fine
+  // because the read already succeeded.
+  void ref.set({ last_used_at: nowIso() }, { merge: true }).catch(() => undefined);
+  return { source: data, scope: data.scope, owner_uid: data.owner_uid ?? '' };
 }
 
 /**

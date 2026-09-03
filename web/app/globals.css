@@ -134,7 +134,7 @@ body {
 
   /* Pill — mono caps, hairline ring, low-opacity tint. */
   .pill {
-    @apply inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 font-mono text-[10px] font-medium uppercase leading-4 tracking-mono-wide ring-1 ring-inset;
+    @apply inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 font-mono text-[10px] font-medium uppercase leading-4 tracking-wider ring-1 ring-inset;
   }
 
   /* Buttons — small radius, mono caps for primary/dispatch. */
@@ -142,10 +142,10 @@ body {
     @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2 text-sm font-medium leading-5 transition-all duration-150 ease-out-quint disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-brand-500 text-bg-base font-mono text-[11px] uppercase tracking-mono-wide hover:bg-brand-400 active:translate-y-px;
+    @apply btn bg-brand-500 text-bg-base font-mono text-[11px] uppercase tracking-wider hover:bg-brand-400 active:translate-y-px;
   }
   .btn-dispatch {
-    @apply btn bg-magenta-500 text-bg-base font-mono text-[11px] uppercase tracking-mono-wide hover:bg-magenta-400 active:translate-y-px;
+    @apply btn bg-magenta-500 text-bg-base font-mono text-[11px] uppercase tracking-wider hover:bg-magenta-400 active:translate-y-px;
   }
   .btn-secondary {
     @apply btn border border-border-default/40 bg-bg-surface text-ink-1 hover:border-border-strong/60 hover:bg-bg-raised;
@@ -204,12 +204,12 @@ body {
 
   /* Wordmark — mono caps cyan-500, widest tracking. */
   .wordmark {
-    @apply font-mono text-[14px] font-medium uppercase tracking-mono-widest text-brand-500;
+    @apply font-mono text-[14px] font-medium uppercase tracking-widest text-brand-500;
   }
 
   /* Section eyebrow — small mono caps cyan label. */
   .eyebrow {
-    @apply font-mono text-[10px] font-medium uppercase tracking-mono-widest text-ink-3;
+    @apply font-mono text-[10px] font-medium uppercase tracking-widest text-ink-3;
   }
 
   /* Dispatch scan — magenta sweep that runs across a button on click. */

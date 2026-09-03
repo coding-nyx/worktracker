@@ -17,7 +17,7 @@ export interface Config {
   /** Optional MiniMax API key. */
   llmApiKey?: string;
   // Slice 1 (wrecking ball): the `adminSources` allowlist is gone.
-  // Sources declare their own `scope` field in `SourceRegistration`;
+  // Sources declare their own `scope` field in `Client`;
   // see `apps/api/src/auth.ts:getEffectiveScope`. The env var
   // `WORKTRACKER_ADMIN_SOURCES` is no longer read.
 }

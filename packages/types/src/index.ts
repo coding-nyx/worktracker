@@ -157,11 +157,22 @@ export interface WorkItemEvent {
 }
 
 // =====================================================================
-// Source manifest and registration
 // =====================================================================
+// Clients — slice 2
+// =====================================================================
+//
+// One `clients/{name}` document per authenticated identity that calls
+// the API. The `kind` discriminator picks the auth shape:
+//   - `kind: 'agent'`  — bearer is `<name>.<random_key>`, scrypt-hashed
+//   - `kind: 'user'`   — bearer is `wt_<random_32byte_id>`, the id IS
+//                        the credential (256 bits of entropy)
+//
+// The `api_tokens` collection is gone. Personal access tokens are
+// `clients` rows with `kind: 'user'`. The web UI's `ApiTokensSection`
+// becomes "Your personal clients" — a filtered view of this collection.
 
-export const SOURCE_KINDS = ['agent', 'human', 'system', 'webhook'] as const;
-export type SourceKind = (typeof SOURCE_KINDS)[number];
+export const CLIENT_KINDS = ['agent', 'user'] as const;
+export type ClientKind = (typeof CLIENT_KINDS)[number];
 
 export const CORE_CAPABILITIES = [
   'create',
@@ -186,10 +197,10 @@ export interface EnricherConfig {
   command: string;
 }
 
-export interface SourceManifest {
+export interface ClientManifest {
   name: string;
   display_name: string;
-  kind: SourceKind;
+  kind: ClientKind;
   capabilities: Capability[];
   webhook_url?: string | null;
   icon?: string | null;
@@ -200,32 +211,133 @@ export interface SourceManifest {
   };
 }
 
-export interface SourceRegistration {
+export interface Client {
   name: string;
   display_name: string;
-  kind: SourceKind;
+  kind: ClientKind;
   /**
-   * Effective permission scope of this source. Read by the auth
-   * middleware (`getEffectiveScope`) so `tools/list` is filtered
-   * per-token. The 5 board admin tools require `admin`; reads
-   * accept any scope. Defaults to `read_write` for legacy rows that
-   * predate slice 1; new sources declare their scope at
-   * registration time. Wrecking-ball: there is no allowlist
-   * fallback; this field is the single source of truth.
+   * Effective permission scope. The auth middleware reads this
+   * (`getEffectiveScope`) so `tools/list` is filtered per-token
+   * and `tools/call` fails closed for out-of-scope requests.
+   * Declared at registration; rotatable by an admin; never
+   * downscoped silently.
    */
   scope: ApiTokenScope;
-  manifest: SourceManifest;
+  /** Firebase uid of the owning user, or null for system agents. */
+  owner_uid: string | null;
+  /** Mirrored email for the owning user, used in admin UIs. */
+  owner_email?: string | null;
+  manifest: ClientManifest;
   capabilities: Capability[];
   webhook_secret: string | null;
   enabled: boolean;
-  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  rotated_at: string | null;
+  /**
+   * Soft-delete; a revoked client still resolves to a doc but
+   * `requireSource` rejects it. Only meaningful for `kind: 'user'`.
+   */
+  revoked_at: string | null;
+  /**
+   * Scrypt hash of the bearer, only for `kind: 'agent'`. The bearer
+   * plaintext is `<name>.<random_key>`; the hash is
+   * `scrypt$<salt-hex>$<derived-hex>`. Null for `kind: 'user'`.
+   */
+  api_key_hash?: string | null;
+  /**
+   * Random 32-byte id, only for `kind: 'user'`. The bearer is
+   * `wt_<bearer_id>`; knowing the bearer_id IS the credential.
+   */
+  bearer_id?: string | null;
+  /**
+   * Plaintext bearer, returned exactly once at creation or
+   * rotation time. Never persisted.
+   */
+  bearer?: string;
+  // Legacy / connector-shaped fields (kept for sources that
+  // predate the client/connector split; will move to `connectors/`
+  // in a follow-up).
+  last_sync_at?: string | null;
+  last_error?: string | null;
+}
+
+// =====================================================================
+// Connectors — slice 2
+// =====================================================================
+//
+// An integration the API talks to. A `Client` is an authenticated
+// identity that calls us; a `Connector` is a system we call (mirror,
+// webhook-in, webhook-out, bridge). Hermes is both — `clients/hermes`
+// is its bearer, `connectors/hermes` is its integration config.
+
+export const CONNECTOR_KINDS = [
+  'mirror',
+  'webhook-in',
+  'webhook-out',
+  'bridge',
+] as const;
+export type ConnectorKind = (typeof CONNECTOR_KINDS)[number];
+
+export type ConnectorStatus = 'ok' | 'error' | null;
+
+export interface Connector {
+  name: string;
+  kind: ConnectorKind;
+  /** Protocol sub-kind, e.g. 'hermes-cli-v1' | 'webhook-json-v1'. */
+  protocol: string;
+  /** Kind-specific configuration (e.g. hermesBin, webhookUrl). */
+  config: Record<string, unknown>;
+  enabled: boolean;
+  last_run_at: string | null;
+  last_status: ConnectorStatus;
   last_error: string | null;
   created_at: string;
   updated_at: string;
-  /** Stored alongside the document but not exposed in API responses. */
-  api_key_hash?: string;
-  /** API key, returned exactly once at creation time. */
-  api_key?: string;
+}
+
+export interface ListClientsResponse {
+  clients: Client[];
+}
+
+export interface CreateClientRequest {
+  manifest: ClientManifest;
+  /** Optional initial bearer; absent means one is generated. */
+  bearer?: string;
+  /** Scope defaults to `read_write`. Admin tokens can request `admin`. */
+  scope?: ApiTokenScope;
+  /** Firebase uid of the owning user, for `kind: 'user'`. */
+  owner_uid?: string;
+  owner_email?: string;
+}
+
+export interface CreateClientResponse {
+  client: Client;
+  /** Plaintext bearer, shown exactly once. */
+  bearer: string;
+}
+
+export interface RotateClientResponse {
+  client: Client;
+  /** New plaintext bearer; the old one is invalidated. */
+  bearer: string;
+}
+
+export interface IntrospectClientResponse {
+  name: string;
+  kind: ClientKind;
+  scope: ApiTokenScope;
+  owner_uid: string | null;
+  last_used_at: string | null;
+  capabilities: Capability[];
+  server_version: string;
+  /** The list of tool names this client can call. */
+  visible_tools: string[];
+}
+
+export interface ListConnectorsResponse {
+  connectors: Connector[];
 }
 
 // =====================================================================
@@ -469,13 +581,13 @@ export interface EnrichRequest {
 }
 
 export interface CreateSourceRequest {
-  manifest: SourceManifest;
+  manifest: ClientManifest;
   /** Optional initial API key; if absent, one is generated. */
   api_key?: string;
 }
 
 export interface CreateSourceResponse {
-  source: SourceRegistration;
+  source: Client;
   /** Plaintext API key, shown exactly once. */
   api_key: string;
 }

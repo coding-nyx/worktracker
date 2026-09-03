@@ -156,8 +156,10 @@ export async function buildApp(): Promise<FastifyInstance> {
   await healthRoutes(app);
   const { itemsRoutes } = await import('./routes/items.js');
   await itemsRoutes(app);
-  const { sourcesRoutes } = await import('./routes/sources.js');
-  await sourcesRoutes(app);
+  const { clientsRoutes } = await import('./routes/clients.js');
+  await clientsRoutes(app);
+  const { connectorsRoutes } = await import('./routes/connectors.js');
+  await connectorsRoutes(app);
   const { commandsRoutes } = await import('./routes/commands.js');
   await commandsRoutes(app);
   const { commandsAdminRoutes } = await import('./routes/commands-admin.js');
@@ -168,8 +170,6 @@ export async function buildApp(): Promise<FastifyInstance> {
   await authRoutes(app);
   const { adminUsersRoutes } = await import('./routes/admin-users.js');
   await adminUsersRoutes(app);
-  const { apiTokensRoutes } = await import('./routes/api-tokens.js');
-  await apiTokensRoutes(app);
   const { aiRoutes } = await import('./routes/ai.js');
   await aiRoutes(app);
   const { webhookRoutes } = await import('./routes/webhooks.js');

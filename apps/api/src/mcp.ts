@@ -45,7 +45,9 @@ export interface JsonRpcResponse {
 
 // ----- Tool definitions -----
 
-const TOOLS = [
+// ----- Tool registry (exported for slice 2's clients.introspect) -----
+
+export const TOOLS = [
   {
     name: 'worktracker_list_items',
     required_scope: 'read',

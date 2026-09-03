@@ -77,10 +77,10 @@ export default function HomePage() {
   const itemsToShow: WorkItem[] = items.length > 0 ? items : (restData?.items ?? []);
 
   const { data: sourcesData } = useQuery({
-    queryKey: ['sources'],
-    queryFn: () => api.listSources(),
+    queryKey: ['clients'],
+    queryFn: () => api.listClients(),
   });
-  const sources = sourcesData?.sources ?? [];
+  const sources = (sourcesData?.clients ?? []).map((c) => ({ name: c.name, display_name: c.display_name }));
 
   const { data: boardsData } = useQuery({
     queryKey: ['boards'],

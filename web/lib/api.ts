@@ -7,24 +7,31 @@
  * Firebase Auth is the primary auth path; the admin-token
  * fallback is for operator scripts, MCP, and the deep-link
  * hash bootstrap.
+ *
+ * Slice 2: the `sources` and `api_tokens` REST surfaces are
+ * consolidated under `/api/clients`. `clients` is the unified
+ * shape for any authenticated identity — agents (MCP servers,
+ * bridges) and users (personal access tokens). Connectors are
+ * a separate admin-only REST surface at `/api/connectors`.
  */
 
 import type {
-  ApiToken,
   Board,
+  Client,
+  ClientKind,
+  ClientManifest,
   Command,
   CommandFailuresResponse,
-  CreateSourceRequest,
-  CreateSourceResponse,
+  Connector,
+  ConnectorKind,
   CreateBoardRequest,
-  CreateApiTokenRequest,
-  CreateApiTokenResponse,
   EnrichRequest,
+  IntrospectClientResponse,
   LinkRequest,
-  ListApiTokensResponse,
-  ListItemsResponse,
   ListBoardsResponse,
-  SourceRegistration,
+  ListClientsResponse,
+  ListConnectorsResponse,
+  ListItemsResponse,
   TransitionRequest,
   UpdateBoardRequest,
   WorkItem,
@@ -111,6 +118,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return JSON.parse(text) as T;
 }
 
+export type ApiTokenScope = 'read' | 'read_write' | 'admin';
+
 export const api = {
   listItems: (q: { kind?: string; status?: string; source?: string; owner?: string; limit?: number } = {}) => {
     const params = new URLSearchParams();
@@ -142,8 +151,46 @@ export const api = {
   enrich: (id: string, body: EnrichRequest) =>
     request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/enrich`, body),
 
-  listSources: () => request<{ sources: SourceRegistration[] }>('GET', '/api/sources'),
-  createSource: (body: CreateSourceRequest) => request<CreateSourceResponse>('POST', '/api/sources', body),
+  // ---- Clients (slice 2) ----
+  // Unified surface for any authenticated identity — agent clients
+  // (MCP servers, bridges) and user clients (personal access tokens).
+  // The "register agent" POST is admin-only; the "mint user" POST is
+  // a logged-in user minting a personal client for themselves.
+  listClients: () => request<ListClientsResponse>('GET', '/api/clients'),
+  getClient: (name: string) => request<{ client: Client }>('GET', `/api/clients/${encodeURIComponent(name)}`),
+  introspectClient: () => request<IntrospectClientResponse>('GET', '/api/clients/introspect'),
+  registerClient: (body: { manifest: ClientManifest; bearer?: string; scope?: ApiTokenScope }) =>
+    request<{ client: Client; bearer: string }>('POST', '/api/clients', body),
+  patchClient: (name: string, patch: { enabled?: boolean; scope?: ApiTokenScope; display_name?: string }) =>
+    request<{ client: Client }>('PATCH', `/api/clients/${encodeURIComponent(name)}`, patch),
+  rotateClient: (name: string) =>
+    request<{ client: Client; bearer: string }>('POST', `/api/clients/${encodeURIComponent(name)}/rotate`),
+  revokeClient: (name: string) =>
+    request<{ name: string; revoked?: boolean; disabled?: boolean }>('DELETE', `/api/clients/${encodeURIComponent(name)}`),
+  mintClient: (body: { name: string; scope: ApiTokenScope; owner_uid: string; owner_email: string }) =>
+    request<{ client: Client; bearer: string }>('POST', '/api/clients/mint', body),
+
+  // ---- Connectors (slice 2, admin-only) ----
+  // The integrations the API talks to. Hermes, OpenClaw, GitHub
+  // mirror, etc. — separate from clients because a client is who
+  // calls us; a connector is what we call.
+  listConnectors: () => request<ListConnectorsResponse>('GET', '/api/connectors'),
+  getConnector: (name: string) =>
+    request<{ connector: Connector }>('GET', `/api/connectors/${encodeURIComponent(name)}`),
+  registerConnector: (body: {
+    name: string;
+    kind: ConnectorKind;
+    protocol: string;
+    config?: Record<string, unknown>;
+    enabled?: boolean;
+  }) => request<{ connector: Connector }>('POST', '/api/connectors', body),
+  patchConnector: (name: string, patch: { enabled?: boolean; config?: Record<string, unknown>; protocol?: string }) =>
+    request<{ connector: Connector }>('PATCH', `/api/connectors/${encodeURIComponent(name)}`, patch),
+  testConnector: (name: string) =>
+    request<{ ok: boolean; connector: Connector; note?: string }>(
+      'POST',
+      `/api/connectors/${encodeURIComponent(name)}/test`,
+    ),
 
   // Admin: user management. listUsers / updateUser / inviteUser.
   // All three require an admin (is_admin: true) bearer; the API
@@ -184,13 +231,7 @@ export const api = {
       'POST',
       `/api/commands/${id}/replay`,
     ),
-
-  // Personal API tokens: mint, list, revoke. The bearer
-  // plaintext is only ever returned by `createToken`; the
-  // settings page surfaces it once and discards.
-  listApiTokens: () => request<ListApiTokensResponse>('GET', '/api/auth/tokens'),
-  createApiToken: (body: CreateApiTokenRequest) =>
-    request<CreateApiTokenResponse>('POST', '/api/auth/tokens', body),
-  revokeApiToken: (id: string) =>
-    request<{ token: ApiToken }>('DELETE', `/api/auth/tokens/${id}`),
 };
+
+// Re-export the kinds the UI cares about for tight imports.
+export type { Client, ClientKind, ClientManifest, Connector, ConnectorKind };
