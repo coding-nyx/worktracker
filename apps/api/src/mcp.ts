@@ -1,31 +1,31 @@
 /**
- * MCP server. Mounts at `/mcp` on the same Fastify process as
- * the REST API. Implements the JSON-RPC 2.0 + SSE transport
- * the MCP spec defines, with our `worktracker_*` tools.
+ * MCP server — v1 transport. Mounts at `/mcp` and `/api/mcp` on
+ * the same Fastify process as the REST API. Implements the
+ * JSON-RPC 2.0 + SSE-ready transport the MCP spec defines.
  *
- * Auth uses the same per-source bearer token as the REST API.
- * Each source connects with its own key; admin tools (`worktracker_*`
- * admin operations, if any) require the admin token.
+ * The 23 tools are declared in `mcp-tools.ts`; this file only
+ * handles:
+ *   - HTTP route registration
+ *   - The JSON-RPC envelope (initialize, notifications/initialized,
+ *     tools/list, tools/call)
+ *   - The /mcp.md Markdown on-ramp
+ *   - The /mcp/stream Streamable HTTP variant (slice 1)
+ *
+ * The v2 transport (`mcp-v2.ts`) is identical except for the
+ * `tools/call` result envelope (spec-compliant `content[]` +
+ * `structuredContent`); both call the same `dispatchTool` from
+ * the registry.
+ *
+ * The "no tool will fail" promise (architecture v1 §1) is
+ * preserved by `tools/list` filtering the catalog by the
+ * bearer's effective scope. `tools/call` re-checks as defense
+ * in depth.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
-import type {
-  Board,
-  Command,
-  ListItemsQuery,
-  McpDispatchArgs,
-  McpEnrichArgs,
-  WorkItem,
-} from '@worktracker/types';
-import { z } from 'zod';
-import { ulid, nowIso } from './ids.js';
-import { getDb } from './firestore.js';
-import { requireSource, hasScopeAtLeast, getEffectiveScope } from './auth.js';
-import type { ApiTokenScope } from '@worktracker/types';
-import { InvalidInputError } from './errors.js';
-import { evaluateCommand as _evaluateCommand } from './brain.js';
-void _evaluateCommand; // reserved for the in-process evaluation path
+import { requireSource, getEffectiveScope } from './auth.js';
+import { dispatchTool, listToolsForScope, findTool } from './mcp-tools.js';
 
 // ----- JSON-RPC 2.0 envelopes -----
 
@@ -43,263 +43,41 @@ export interface JsonRpcResponse {
   error?: { code: number; message: string; data?: unknown };
 }
 
-// ----- Tool definitions -----
+/**
+ * The internal shape `dispatchTool` returns. The v1 wrapper
+ * publishes this directly as `result`; the v2 wrapper wraps it
+ * in the spec-compliant `content` + `structuredContent` envelope.
+ */
+export interface DispatchResult {
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+  code?: number;
+}
 
-// ----- Tool registry (exported for slice 2's clients.introspect) -----
+// ----- Tool discovery (re-export the registry's filtered view) -----
 
-export const TOOLS = [
-  {
-    name: 'worktracker_list_items',
-    required_scope: 'read',
-    description:
-      'List work items. Returns items, optionally filtered by kind/status/source/owner and a search query.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        kind: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] },
-        status: { type: 'string' },
-        source: { type: 'string' },
-        owner: { type: 'string' },
-        q: { type: 'string' },
-        limit: { type: 'number', minimum: 1, maximum: 200, default: 50 },
-        include_archived: { type: 'boolean', default: false },
-      },
-    },
-  },
-  {
-    name: 'worktracker_get_item',
-    required_scope: 'read',
-    description: 'Get one work item by id, including its event timeline.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' } },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'worktracker_create_item',
-    required_scope: 'read_write',
-    description: 'Create a new work item. Returns the new item id.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        kind: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] },
-        title: { type: 'string' },
-        body: { type: 'string' },
-        severity: { type: 'string' },
-        priority: { type: 'string' },
-        owner: { type: 'string' },
-        due_at: { type: 'string' },
-        source_id: { type: 'string' },
-        source_meta: { type: 'object' },
-      },
-      required: ['kind', 'title'],
-    },
-  },
-  {
-    name: 'worktracker_update_item',
-    required_scope: 'read_write',
-    description: 'Update fields on a work item. Requires expected_version for optimistic concurrency.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        patch: { type: 'object' },
-        expected_version: { type: 'number' },
-      },
-      required: ['id', 'patch', 'expected_version'],
-    },
-  },
-  {
-    name: 'worktracker_transition',
-    required_scope: 'read_write',
-    description: 'Transition a work item to a new status. Enqueues a `transition` command.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        to_status: { type: 'string' },
-        comment: { type: 'string' },
-        force_dispatch: { type: 'boolean' },
-        expected_version: { type: 'number' },
-      },
-      required: ['id', 'to_status', 'expected_version'],
-    },
-  },
-  {
-    name: 'worktracker_comment',
-    required_scope: 'read_write',
-    description: 'Add a comment event to a work item.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        body: { type: 'string' },
-        expected_version: { type: 'number' },
-      },
-      required: ['id', 'body'],
-    },
-  },
-  {
-    name: 'worktracker_link_items',
-    required_scope: 'read_write',
-    description: 'Link two work items (parent -> child) with a kind.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        parent_id: { type: 'string' },
-        child_id: { type: 'string' },
-        kind: {
-          type: 'string',
-          enum: ['depends_on', 'blocks', 'related', 'mirrors', 'parent_of'],
-        },
-      },
-      required: ['parent_id', 'child_id', 'kind'],
-    },
-  },
-  {
-    name: 'worktracker_set_reminder',
-    required_scope: 'read_write',
-    description: 'Attach a reminder to a work item (v0.5).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        item_id: { type: 'string' },
-        remind_at: { type: 'string' },
-        channel: { type: 'string' },
-        target: { type: 'string' },
-      },
-      required: ['item_id', 'remind_at', 'channel', 'target'],
-    },
-  },
-  {
-    name: 'worktracker_enrich',
-    required_scope: 'read_write',
-    description: 'Run Grill or Wayfind on a work item. v0 stretch.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        stage: { type: 'string', enum: ['grill', 'wayfind', 'both'] },
-        enricher: { type: 'string' },
-      },
-      required: ['id', 'stage'],
-    },
-  },
-  {
-    name: 'worktracker_dispatch',
-    required_scope: 'read_write',
-    description: 'High-level tool: pre-flight check + missing enrichment + status transition. Returns a job id.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        options: {
-          type: 'object',
-          properties: {
-            force: { type: 'boolean' },
-            enricher: { type: 'string' },
-            stages: { type: 'array', items: { type: 'string', enum: ['grill', 'wayfind'] } },
-          },
-        },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'worktracker_list_boards',
-    required_scope: 'read',
-    description: 'List all kanban boards. Returns the full Board objects (name, columns, kind filter, default flag).',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'worktracker_get_board',
-    required_scope: 'read',
-    description: 'Get one board by id, including its column definitions and kind filter.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' } },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'worktracker_create_board',
-    required_scope: 'admin',
-    description: 'Create a new board. Admin only. The board becomes available immediately to every user; pass is_default=true to make it the landing view.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', minLength: 1, maxLength: 120 },
-        description: { type: 'string', maxLength: 2000 },
-        kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
-        columns: {
-          type: 'array',
-          minItems: 1,
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              label: { type: 'string' },
-              statuses: { type: 'array', items: { type: 'string' }, minItems: 1 },
-              kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
-            },
-            required: ['id', 'label', 'statuses'],
-          },
-        },
-        is_default: { type: 'boolean' },
-      },
-      required: ['name', 'columns'],
-    },
-  },
-  {
-    name: 'worktracker_update_board',
-    required_scope: 'admin',
-    description: 'Update an existing board. Admin only. Omit any field to keep its current value.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        name: { type: 'string', minLength: 1, maxLength: 120 },
-        description: { type: 'string', maxLength: 2000 },
-        kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
-        columns: {
-          type: 'array',
-          minItems: 1,
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              label: { type: 'string' },
-              statuses: { type: 'array', items: { type: 'string' }, minItems: 1 },
-              kinds: { type: 'array', items: { type: 'string', enum: ['task', 'ticket', 'decision', 'review'] } },
-            },
-            required: ['id', 'label', 'statuses'],
-          },
-        },
-        is_default: { type: 'boolean' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'worktracker_delete_board',
-    required_scope: 'admin',
-    description: 'Delete a board. Admin only. The default board cannot be deleted; set another board as default first.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' } },
-      required: ['id'],
-    },
-  },
-] as const;
+/**
+ * The 23 MCP tool descriptors, filtered by the bearer's effective
+ * scope. The list is computed on every `tools/list` call so
+ * scope changes (admin promotion, demotion) take effect
+ * immediately.
+ */
+export function listToolsForRequest(req: FastifyRequest) {
+  return listToolsForScope(getEffectiveScope(req));
+}
 
-// ----- Discoverability doc (served on GET /mcp.md) -----
+/**
+ * Look up a tool by name. Convenience re-export for the v2
+ * wrapper, which doesn't import from auth.ts directly.
+ */
+export { findTool };
+
+// ----- Markdown on-ramp (served on GET /mcp.md) -----
 //
-// A Markdown on-ramp for LLM agents (Claude Code, Codex, Hermes) so they
-// can be pointed at `https://worktracker-nyx.web.app/mcp.md` and
-// figure out how to connect + what tools exist, without first having
-// the connection wired up in a config file. The doc is public — auth
-// is only enforced on POST /mcp.
+// A Markdown page for LLM agents (Claude Code, Codex, Hermes).
+// The page is public — auth is only enforced on POST /mcp. Edit
+// here and redeploy to update the live page.
 
 const MCP_DOC = `# MCP for WorkTracker
 
@@ -311,43 +89,46 @@ state, mutate work items, and manage boards through a single HTTP endpoint.
 - **Protocol:** JSON-RPC 2.0 over HTTP
 - **Transport:** Request/response in v0 (SSE endpoint is registered but
   does not yet push events)
-- **Auth:** Bearer token per source, or the \`WORKTRACKER_ADMIN_TOKEN\`
-- **Tools:** 15 (\`worktracker_*\`)
+- **Auth:** Bearer token per client, or the \`WORKTRACKER_ADMIN_TOKEN\`
+- **Tools:** 23 (dotted namespaces: \`worktracker.items.*\`, \`worktracker.boards.*\`,
+  \`worktracker.files.*\`, \`worktracker.clients.*\`, \`worktracker.connectors.*\`,
+  \`worktracker.dispatch.*\`, \`worktracker.enrich.*\`)
 
 This page is the on-ramp. Fetch it with \`curl\` or point an LLM at it.
-The canonical doc is also on GitHub at
-\`github.com/coding-nyx/worktracker\` (see the MCP section in the README).
 
 ---
 
 ## Quick start
 
-### 1. Add a source (admin)
+### 1. Add a client (admin)
 
-A source is a named API client. The admin creates it; the API returns a
-\`<source>.<key>\` bearer. The server stores the key as a scrypt hash;
-the plaintext is shown once.
+A client is a named API credential. The admin registers it; the API
+returns a bearer. The server stores the key as a scrypt hash; the
+plaintext is shown once.
 
 \`\`\`bash
-curl -X POST https://worktracker-nyx.web.app/api/sources \\
+curl -X POST https://worktracker-nyx.web.app/api/clients \\
   -H "Authorization: Bearer $WORKTRACKER_ADMIN_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"name":"my-agent","kind":"external"}'
+  -d '{"manifest":{"name":"my-agent","display_name":"My Agent",
+                  "kind":"agent",
+                  "capabilities":["create","update","transition","comment","link"],
+                  "version":"1.0.0"},
+       "scope":"read_write"}'
 \`\`\`
 
 Response (example):
 
 \`\`\`json
 {
-  "name": "my-agent",
-  "kind": "external",
+  "client": { "name": "my-agent", "kind": "agent", "scope": "read_write" },
   "bearer": "my-agent.E7pK2..."
 }
 \`\`\`
 
 Treat \`bearer\` like a password.
 
-### 2. Wire the source into your MCP client
+### 2. Wire the client into your MCP client
 
 #### Claude Code (\`.mcp.json\` in project root, or \`~/.claude.json\`)
 
@@ -375,7 +156,7 @@ bearer_token = "my-agent.E7pK2..."
 
 #### Hermes / generic HTTP MCP client
 
-Point at the URL above with \`Authorization: Bearer <source>.<key>\`.
+Point at the URL above with \`Authorization: Bearer <client>.<key>\`.
 
 ### 3. First call
 
@@ -383,7 +164,9 @@ Point at the URL above with \`Authorization: Bearer <source>.<key>\`.
 curl -X POST https://worktracker-nyx.web.app/mcp \\
   -H "Authorization: Bearer my-agent.E7pK2..." \\
   -H "Content-Type: application/json" \\
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+       "params":{"protocolVersion":"2024-11-05","capabilities":{},
+                 "clientInfo":{"name":"docs","version":"1"}}}'
 \`\`\`
 
 Response:
@@ -394,7 +177,7 @@ Response:
   "id": 1,
   "result": {
     "protocolVersion": "2024-11-05",
-    "serverInfo": { "name": "worktracker", "version": "0.1.0" },
+    "serverInfo": { "name": "worktracker", "version": "1.0.0" },
     "capabilities": { "tools": {} }
   }
 }
@@ -408,7 +191,7 @@ Then list the tools and call one:
 
 \`\`\`json
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
-  "name":"worktracker_list_items",
+  "name":"worktracker.items.list",
   "arguments":{"limit":10}
 }}
 \`\`\`
@@ -420,74 +203,89 @@ Then list the tools and call one:
 Three paths through \`requireSource\`:
 
 1. **Admin token.** \`WORKTRACKER_ADMIN_TOKEN\`. Sets
-   \`req.auth = { kind: 'admin' }\`. Bypasses the sources collection.
+   \`req.auth = { kind: 'admin' }\`. Bypasses the clients collection.
 2. **Firebase Auth ID token** (three dot-separated base64
    segments). Verifies the signature via
    \`getAuth().verifyIdToken\`. A user with \`is_admin: true\` is
    admin-equivalent; everyone else is \`read\`.
-3. **API token** (\`wt_<tokenId>\`) or **legacy source bearer**
-   (\`<source>.<key>\`, scrypt-hashed at registration). API
-   tokens carry their own \`scope\`; legacy sources resolve
-   through the sources collection and get
-   \`read_write\` by default, or \`admin\` if their name is on
-   the \`adminSources\` allowlist (default
-   \`['hermes', 'claude', 'codex']\`, override with the
-   comma-separated env \`WORKTRACKER_ADMIN_SOURCES\`).
+3. **Client bearer.** \`<client-name>.<key>\` (scrypt-hashed) for
+   agent clients, or \`wt_<bearer_id>\` for personal access tokens.
+   Each carries its own \`scope\` (\`read\` / \`read_write\` / \`admin\`).
 
-A source with \`enabled: false\` returns \`403\`.
+A client with \`enabled: false\` returns \`403\`.
 
-The three board admin tools
-(\`worktracker_create_board\`, \`worktracker_update_board\`,
-\`worktracker_delete_board\`) require effective scope
-\`admin\`, which means any of:
+The 23 tools are split by scope:
 
-- \`req.auth.kind === 'admin'\` (admin token)
-- \`req.auth.source.name === 'web'\` (React app's virtual admin)
-- \`req.auth.user.is_admin === true\` (Firebase user)
-- legacy source bearer on the \`adminSources\` allowlist
-- API token with \`scope: 'admin'\`
+- **read (7):** \`items.list\`, \`items.get\`, \`boards.list\`,
+  \`boards.get\`, \`files.list\`, \`files.get\`, \`clients.introspect\`
+- **read_write (9):** \`items.create\`, \`items.update\` (also folds
+  transition + archive), \`items.comment\`, \`items.link\`,
+  \`items.unlink\`, \`files.upload\`, \`dispatch.run\`, \`enrich.run\`
+- **admin (7):** \`boards.create\`, \`boards.update\`,
+  \`boards.delete\`, \`clients.list\`, \`clients.mint\`,
+  \`clients.rotate\`, \`connectors.list\`, \`connectors.get\`
 
-All other tools accept any enabled caller with at least
-\`read\` scope.
+\`tools/list\` filters the catalog by the bearer's effective scope
+so a caller only sees tools they can run. \`tools/call\` re-checks
+as defense in depth; an out-of-scope call returns \`-32603\` with a
+clear debuggable message.
 
 ---
 
-## Tools (15)
+## Tools (23)
 
-### Work items (10)
+### items (7)
 
-| Tool | Auth | Purpose |
+| Tool | Scope | Purpose |
 | --- | --- | --- |
-| \`worktracker_list_items\`    | any source | List items, optional filters (kind, status, source, owner, q, limit, include_archived) |
-| \`worktracker_get_item\`      | any source | One item + its \`events\` subcollection |
-| \`worktracker_create_item\`   | any source | Enqueue a \`create\` command; returns \`command_id\` |
-| \`worktracker_update_item\`   | any source | Enqueue an \`update\` command (optimistic concurrency) |
-| \`worktracker_transition\`    | any source | Enqueue a \`transition\` command |
-| \`worktracker_comment\`       | any source | Append a comment event |
-| \`worktracker_link_items\`    | any source | Link two items with \`depends_on | blocks | related | mirrors | parent_of\` |
-| \`worktracker_set_reminder\`  | any source | v0.5 stub: returns \`{ accepted: false, reason: "v0.5" }\` |
-| \`worktracker_enrich\`        | any source | Enqueue \`grill | wayfind | both\` |
-| \`worktracker_dispatch\`      | any source | Pre-flight + missing enrichment + transition (heaviest single tool) |
+| \`worktracker.items.list\`        | read | List with kind/status/source/board/owner/q/limit/include_archived filters |
+| \`worktracker.items.get\`         | read | One item + events + files |
+| \`worktracker.items.create\`      | read_write | Create (data, data_map, plan_file_id, analysis, files[], board_id=null for backlog) |
+| \`worktracker.items.update\`      | read_write | Patch fields with \`expected_version\`; status field is routed through the state machine, archived_at through archive |
+| \`worktracker.items.comment\`     | read_write | Append a comment event |
+| \`worktracker.items.link\`        | read_write | Create a typed relationship (depends_on, blocks, related, mirrors, parent_of) |
+| \`worktracker.items.unlink\`      | read_write | Remove a link by (parent_id, child_id, kind) |
 
-### Boards (5)
+### boards (5)
 
-| Tool | Auth | Purpose |
+| Tool | Scope | Purpose |
 | --- | --- | --- |
-| \`worktracker_list_boards\`   | any source | All boards, ordered by name |
-| \`worktracker_get_board\`     | any source | One board by id |
-| \`worktracker_create_board\`  | admin scope| Create; \`is_default: true\` unsets the previous default first |
-| \`worktracker_update_board\`  | admin scope| Patch fields; re-assigning default unsets the previous |
-| \`worktracker_delete_board\`  | admin scope| Delete by id; default board returns \`cannot_delete_default\` |
+| \`worktracker.boards.list\`       | read | All boards, ordered by name |
+| \`worktracker.boards.get\`        | read | One board by id |
+| \`worktracker.boards.create\`     | admin | Create; \`is_default: true\` unsets the previous default in the same batch |
+| \`worktracker.boards.update\`     | admin | Patch fields; re-assigning default unsets the previous |
+| \`worktracker.boards.delete\`     | admin | Delete by id; default board returns \`cannot_delete_default\` |
 
-### Cost profile
+### files (3)
 
-Reads are one Firestore query. Writes enqueue a command and return a
-\`command_id\` immediately; the Brain Cloud Function applies the change
-in the background. \`worktracker_dispatch\` is the heaviest single tool —
-pre-flight, missing enrichment, and transition in one call.
+| Tool | Scope | Purpose |
+| --- | --- | --- |
+| \`worktracker.files.list\`        | read | List files for an item (metadata) |
+| \`worktracker.files.get\`         | read | Download a file by id (metadata; bytes served by \`GET /api/files/:id\`) |
+| \`worktracker.files.upload\`      | read_write | Attach a base64 file to an item; 1 MB per file, 10 MB per item |
 
-\`worktracker_get_item\` is two reads: the document and its
-\`events\` subcollection.
+### clients (4)
+
+| Tool | Scope | Purpose |
+| --- | --- | --- |
+| \`worktracker.clients.list\`      | admin | All clients with scope + last_seen + last_used_at |
+| \`worktracker.clients.mint\`      | admin | Create a new \`kind: user\` client; returns the bearer once |
+| \`worktracker.clients.rotate\`    | admin | Rotate a client's bearer; old bearer invalidated immediately |
+| \`worktracker.clients.introspect\`| read | "Who am I" — returns \`{ name, kind, scope, owner_uid, last_used_at, capabilities, server_version, visible_tools }\` |
+
+### connectors (2)
+
+| Tool | Scope | Purpose |
+| --- | --- | --- |
+| \`worktracker.connectors.list\`   | admin | All connectors with kind, protocol, last_run, last_status |
+| \`worktracker.connectors.get\`    | admin | One connector with config and run history |
+
+### dispatch + enrich (2)
+
+| Tool | Scope | Purpose |
+| --- | --- | --- |
+| \`worktracker.dispatch.run\`      | read_write | Pre-flight + missing enrichment + transition. Extended: can move backlog → board (item_id + board_id + to_status) |
+| \`worktracker.enrich.run\`        | read_write | Standalone Grill / Wayfind run |
 
 ---
 
@@ -503,15 +301,15 @@ JSON-RPC error envelope:
 | --- | --- | --- |
 | \`-32600\` | Invalid Request   | \`jsonrpc\` ≠ \`"2.0"\` or envelope malformed |
 | \`-32601\` | Method not found  | Unknown \`method\` or \`tools/call\` name |
-| \`-32602\` | Invalid params    | zod schema rejects the args; \`data\` carries the field path |
+| \`-32602\` | Invalid params    | Zod schema rejects the args; \`data\` carries the field path |
 | \`-32603\` | Internal error    | Unexpected throw, or admin-only tool called by a non-admin source |
 
 HTTP transport errors (returned before the body is parsed):
 
 | Status | Meaning | Cause |
 | --- | --- | --- |
-| \`401\` | Unauthorized      | Missing bearer, or bearer doesn't match any source / admin token |
-| \`403\` | Forbidden         | Source exists but \`enabled: false\` |
+| \`401\` | Unauthorized      | Missing bearer, or bearer doesn't match any client / admin token |
+| \`403\` | Forbidden         | Client exists but \`enabled: false\` |
 | \`404\` | Not found         | Path is not \`/mcp\` on the Cloud Run service |
 | \`405\` | Method not allowed | \`GET /mcp\` — POST a JSON-RPC envelope instead |
 
@@ -533,7 +331,7 @@ This page (\`/mcp.md\`) is served on \`GET\` and does not conflict with
 
 - **This page:** https://worktracker-nyx.web.app/mcp.md
 - **README:** https://github.com/coding-nyx/worktracker (MCP section)
-- **Source code:** \`apps/api/src/mcp.ts\`, \`apps/api/src/auth.ts\`
+- **Source code:** \`apps/api/src/mcp.ts\`, \`apps/api/src/mcp-tools.ts\`, \`apps/api/src/auth.ts\`
 - **Deploy:** Cloud Run \`worktracker-api\` (us-central1), Firebase Hosting
   \`worktracker-nyx\`
 
@@ -542,41 +340,6 @@ redeploy to update this page.
 `;
 
 // ----- Router -----
-
-/**
- * Look up the scope a tool requires. Falls back to `read` (most
- * permissive) for tools not in the registry — this means a new
- * tool that lands in the dispatch but not yet in TOOLS is visible
- * to all callers by default. The opposite of "fail closed", but
- * the right default for a development surface; flip to `'admin'`
- * once you want explicit gating.
- *
- * The "no tool will fail" promise (architecture v1 §1) is preserved
- * by the top-level filter in `tools/list`: callers only see tools
- * they can run. The `tools/call` gate is defense in depth.
- */
-function getRequiredScope(toolName: string): ApiTokenScope {
-  const tool = (TOOLS as ReadonlyArray<{ name: string; required_scope?: ApiTokenScope }>).find(
-    (t) => t.name === toolName,
-  );
-  return tool?.required_scope ?? 'read';
-}
-
-/**
- * SCOPE_RANK — mirror of `auth.ts` to keep this module's scope
- * checks self-contained. The auth middleware owns the same ranks;
- * we duplicate here because `mcp.ts` filters tools in the request
- * hot path and shouldn't pay a module-graph cost for the lookup.
- */
-const SCOPE_RANK: Record<ApiTokenScope, number> = {
-  read: 1,
-  read_write: 2,
-  admin: 3,
-};
-
-function scopeAtLeast(have: ApiTokenScope, need: ApiTokenScope): boolean {
-  return SCOPE_RANK[have] >= SCOPE_RANK[need];
-}
 
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // MCP routes are registered at BOTH `/api/mcp` (so internal
@@ -590,7 +353,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // For v0 the MCP surface is request/response only; SSE is here
   // so the contract is ready when we add it.
   const getHandler = async (
-    _req: import('fastify').FastifyRequest,
+    _req: FastifyRequest,
     reply: import('fastify').FastifyReply,
   ) => {
     reply.code(405).send({ error: 'GET /mcp not supported; POST JSON-RPC to /mcp' });
@@ -640,10 +403,6 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // a single JSON payload per call. The `Mcp-Session-Id` is
   // generated on every request for compatibility with clients
   // that expect it (Codex, OpenClaw).
-  //
-  // The handler is intentionally the same as `/mcp`. Adding the
-  // new transport does not change behavior; it adds a stable
-  // endpoint name for clients that prefer the spec-aligned one.
   // -------------------------------------------------------------------
   app.get('/mcp/stream', { preHandler: requireSource }, (_req, reply) => {
     reply.code(405).send({ error: 'GET /mcp/stream not supported; POST JSON-RPC to /mcp/stream' });
@@ -674,37 +433,28 @@ async function handleRpc(req: JsonRpcRequest, httpReq: FastifyRequest): Promise<
           id: req.id,
           result: {
             protocolVersion: '2024-11-05',
-            serverInfo: { name: 'worktracker', version: '0.1.0' },
+            serverInfo: { name: 'worktracker', version: '1.0.0' },
             capabilities: { tools: {} },
           },
         };
       case 'notifications/initialized':
-        // Client-side notification; no response.
         return { jsonrpc: '2.0', id: req.id, result: {} };
       case 'tools/list': {
-        // Slice 1: filter the catalog by the bearer's effective
-        // scope. A `read` token sees 4 tools, `read_write` sees 12,
-        // `admin` sees all 15. The "no tool will fail" promise: a
-        // caller that can see a tool can run it (modulo the
-        // defense-in-depth check at `tools/call`).
-        const effective = getEffectiveScope(httpReq);
-        const tools = (TOOLS as ReadonlyArray<{ name: string; required_scope?: ApiTokenScope }>).filter(
-          (t) => scopeAtLeast(effective, t.required_scope ?? 'read'),
-        );
-        return { jsonrpc: '2.0', id: req.id, result: { tools } };
+        // Filter the registry by the bearer's effective scope.
+        return { jsonrpc: '2.0', id: req.id, result: { tools: listToolsForRequest(httpReq) } };
       }
       case 'tools/call': {
         const params = (req.params ?? {}) as { name: string; arguments?: unknown };
-        const args = (params.arguments ?? {}) as Record<string, unknown>;
-        return await handleToolCall(req, params.name, args, httpReq);
+        const result = await dispatchTool(params.name, params.arguments, httpReq);
+        if (result.ok) {
+          return { jsonrpc: '2.0', id: req.id, result: result.value };
+        }
+        return rpcError(req, result.code ?? -32603, result.error ?? 'internal error', result.data);
       }
       default:
         return rpcError(req, -32601, `unknown method: ${req.method}`);
     }
   } catch (err) {
-    if (err instanceof InvalidInputError) {
-      return rpcError(req, -32602, err.message, err.details);
-    }
     return rpcError(req, -32603, (err as Error).message);
   }
 }
@@ -716,408 +466,4 @@ function rpcError(
   data?: unknown,
 ): JsonRpcResponse {
   return { jsonrpc: '2.0', id: req.id, error: { code, message, ...(data ? { data } : {}) } };
-}
-
-/**
- * Internal tool-dispatch result. The two protocol wrappers
- * (v1 in `handleToolCall`, v2 in `mcp-v2.ts`) translate this
- * raw shape into the appropriate JSON-RPC envelope. We return
- * data + status separately so the v2 wrapper can put the same
- * data into both `content` (text for the model) and
- * `structuredContent` (machine JSON for the client) without
- * re-running the tool.
- */
-export interface DispatchResult {
-  ok: boolean;
-  value?: unknown;
-  error?: string;
-  /** JSON-RPC error code; defaults to -32603 (internal error) when the wrapper translates. */
-  code?: number;
-}
-
-/**
- * Dispatch a single tool call to the worktracker backend. Same
- * code path used by every consumer (MCP, the AI chat, future
- * integrations); the per-protocol envelope is added by the
- * caller.
- *
- * Exported so:
- *   - `handleToolCall` (v1) wraps it in the bare JSON-RPC
- *     `result: { ... }` shape the AI chat uses
- *   - `mcp-v2.ts` wraps it in the spec-compliant
- *     `result: { content: [...], structuredContent: ... }` shape
- *     for strict MCP SDKs
- */
-export async function dispatchTool(
-  name: string,
-  args: Record<string, unknown>,
-  httpReq: FastifyRequest,
-): Promise<DispatchResult> {
-  // Slice 1: single scope gate at the top. The per-case checks
-  // below are kept as belt-and-braces; they should never fire
-  // because the catalog filter in `tools/list` already prevented
-  // the caller from seeing out-of-scope tools. If we do see one,
-  // surface it as -32603 with a clear debuggable message: the
-  // caller's tool list and the gate are out of sync (a bug).
-  const required = getRequiredScope(name);
-  if (!hasScopeAtLeast(httpReq, required)) {
-    const effective = getEffectiveScope(httpReq);
-    return {
-      ok: false,
-      error: `tool ${name} requires ${required} scope (effective: ${effective})`,
-      code: -32603,
-    };
-  }
-
-  const source = httpReq.auth?.source?.name ?? 'web';
-  const enqueue = async <Op extends Command['op']>(
-    op: Op,
-    itemId: string | null,
-    payload: Extract<Command, { op: Op }>['payload'],
-  ): Promise<Extract<Command, { op: Op }>> => {
-    const command = {
-      id: ulid(),
-      source,
-      source_event_id: null,
-      op,
-      item_id: itemId,
-      payload,
-      status: 'queued' as const,
-      error: null,
-      applied_event_id: null,
-      created_at: nowIso(),
-      applied_at: null,
-    } as Extract<Command, { op: Op }>;
-    await getDb().collection('commands').doc(command.id).set(command);
-    return command;
-  };
-
-  const isAdmin = hasScopeAtLeast(httpReq, 'admin');
-
-  try {
-    switch (name) {
-      case 'worktracker_list_items': {
-        // read scope (or better) — every API token, every legacy
-        // source bearer, every admin/user kind passes.
-        if (!hasScopeAtLeast(httpReq, 'read')) {
-          return { ok: false, error: 'list_items requires read scope', code: -32603 };
-        }
-        const query = (args as unknown as ListItemsQuery) ?? {};
-        const wantLimit = query.limit ?? 50;
-        let ref = getDb().collection('work_items').orderBy('updated_at', 'desc');
-        if (query.kind) ref = ref.where('kind', '==', query.kind);
-        if (query.status) ref = ref.where('status', '==', query.status);
-        if (query.source) ref = ref.where('source', '==', query.source);
-        if (query.owner) ref = ref.where('owner', '==', query.owner);
-        // Over-fetch when the archived filter is on so the
-        // post-fetch filter has enough material. Capped at 200
-        // to keep one bad query from pulling the whole
-        // collection.
-        const fetchLimit = query.include_archived ? wantLimit : Math.min(200, wantLimit * 4);
-        ref = ref.limit(fetchLimit);
-        const snap = await ref.get();
-        let items: WorkItem[] = snap.docs.map((d) => d.data() as WorkItem);
-        // Firestore's `where('archived_at', '==', null)` doesn't
-        // match docs where the field is explicitly null (only
-        // missing fields) — verified against the live data. The
-        // post-fetch filter is the safe move; a dedicated
-        // archived_at index would be the proper fix for v0.5.
-        if (!query.include_archived) {
-          items = items.filter((it) => !it.archived_at);
-        }
-        if (query.q) {
-          const needle = query.q.toLowerCase();
-          items = items.filter(
-            (it) =>
-              it.title.toLowerCase().includes(needle) ||
-              (it.body?.toLowerCase().includes(needle) ?? false),
-          );
-        }
-        items = items.slice(0, wantLimit);
-        return { ok: true, value: { items } };
-      }
-      case 'worktracker_get_item': {
-        if (!hasScopeAtLeast(httpReq, 'read')) {
-          return { ok: false, error: 'get_item requires read scope', code: -32603 };
-        }
-        const id = z.object({ id: z.string() }).parse(args).id;
-        const doc = await getDb().collection('work_items').doc(id).get();
-        if (!doc.exists) return { ok: true, value: { item: null } };
-        const events = await doc.ref.collection('events').orderBy('created_at', 'asc').get();
-        return {
-          ok: true,
-          value: { item: doc.data() as WorkItem, events: events.docs.map((d) => d.data()) },
-        };
-      }
-      case 'worktracker_create_item': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'create_item requires read_write scope', code: -32603 };
-        }
-        const payload = z
-          .object({
-            kind: z.enum(['task', 'ticket', 'decision', 'review']),
-            title: z.string().min(1),
-            body: z.string().optional(),
-            severity: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-            priority: z.enum(['low', 'medium', 'high']).optional(),
-            owner: z.string().optional(),
-            due_at: z.string().optional(),
-            source_id: z.string().optional(),
-            source_meta: z.record(z.unknown()).optional(),
-          })
-          .parse(args);
-        const command = await enqueue('create', null, payload);
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_update_item': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'update_item requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({
-            id: z.string(),
-            patch: z.record(z.unknown()),
-            expected_version: z.number(),
-          })
-          .parse(args);
-        const command = await enqueue('update', args_.id, {
-          patch: args_.patch as never,
-          expected_version: args_.expected_version,
-        });
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_transition': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'transition requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({
-            id: z.string(),
-            to_status: z.string(),
-            comment: z.string().optional(),
-            force_dispatch: z.boolean().optional(),
-            expected_version: z.number(),
-          })
-          .parse(args);
-        const command = await enqueue('transition', args_.id, args_ as never);
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_comment': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'comment requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({ id: z.string(), body: z.string(), expected_version: z.number().optional() })
-          .parse(args);
-        const command = await enqueue('comment', args_.id, args_ as never);
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_link_items': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'link_items requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({
-            parent_id: z.string(),
-            child_id: z.string(),
-            kind: z.enum(['depends_on', 'blocks', 'related', 'mirrors', 'parent_of']),
-          })
-          .parse(args);
-        const command = await enqueue('link', args_.parent_id, args_ as never);
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_set_reminder': {
-        // v0.5 stub. No scope check — always returns the same shape.
-        return { ok: true, value: { accepted: false, reason: 'v0.5' } };
-      }
-      case 'worktracker_enrich': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'enrich requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({ id: z.string(), stage: z.enum(['grill', 'wayfind', 'both']), enricher: z.string().optional() })
-          .parse(args) satisfies McpEnrichArgs;
-        const command = await enqueue('enrich', args_.id, args_ as never);
-        return { ok: true, value: { command_id: command.id, status: 'queued' } };
-      }
-      case 'worktracker_dispatch': {
-        if (!hasScopeAtLeast(httpReq, 'read_write')) {
-          return { ok: false, error: 'dispatch requires read_write scope', code: -32603 };
-        }
-        const args_ = z
-          .object({
-            id: z.string(),
-            options: z
-              .object({
-                force: z.boolean().optional(),
-                enricher: z.string().optional(),
-                stages: z.array(z.enum(['grill', 'wayfind'])).optional(),
-              })
-              .optional(),
-          })
-          .parse(args) satisfies McpDispatchArgs;
-        const target = await getDb().collection('work_items').doc(args_.id).get();
-        if (!target.exists) return { ok: true, value: { error: 'not_found' } };
-        const jobId = ulid();
-        if (args_.options?.stages?.length) {
-          for (const stage of args_.options.stages) {
-            await enqueue('enrich', args_.id, {
-              stage,
-              ...(args_.options.enricher ? { enricher: args_.options.enricher } : {}),
-            });
-          }
-        }
-        return { ok: true, value: { job_id: jobId, status: 'enriching' } };
-      }
-      case 'worktracker_list_boards': {
-        if (!hasScopeAtLeast(httpReq, 'read')) {
-          return { ok: false, error: 'list_boards requires read scope', code: -32603 };
-        }
-        const snap = await getDb().collection('boards').orderBy('name').get();
-        const boards = snap.docs.map((d) => d.data() as Board);
-        return { ok: true, value: { boards } };
-      }
-      case 'worktracker_get_board': {
-        if (!hasScopeAtLeast(httpReq, 'read')) {
-          return { ok: false, error: 'get_board requires read scope', code: -32603 };
-        }
-        const id = z.object({ id: z.string() }).parse(args).id;
-        const doc = await getDb().collection('boards').doc(id).get();
-        if (!doc.exists) return { ok: true, value: { board: null } };
-        return { ok: true, value: { board: doc.data() as Board } };
-      }
-      case 'worktracker_create_board': {
-        if (!isAdmin) return { ok: false, error: 'create_board is admin-only', code: -32603 };
-        const body = z
-          .object({
-            name: z.string().min(1).max(120),
-            description: z.string().max(2000).optional(),
-            kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-            columns: z
-              .array(
-                z.object({
-                  id: z.string().min(1).max(64),
-                  label: z.string().min(1).max(64),
-                  statuses: z.array(z.string().min(1).max(64)).min(1),
-                  kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-                }),
-              )
-              .min(1)
-              .max(20),
-            is_default: z.boolean().optional(),
-          })
-          .parse(args);
-        if (body.is_default) await unsetExistingBoardDefaults();
-        const now = nowIso();
-        const board: Board = {
-          id: ulid(),
-          name: body.name,
-          ...(body.description ? { description: body.description } : {}),
-          ...(body.kinds ? { kinds: body.kinds } : {}),
-          columns: body.columns,
-          is_default: body.is_default ?? false,
-          created_at: now,
-          updated_at: now,
-        };
-        await getDb().collection('boards').doc(board.id).set(board);
-        return { ok: true, value: { board } };
-      }
-      case 'worktracker_update_board': {
-        if (!isAdmin) return { ok: false, error: 'update_board is admin-only', code: -32603 };
-        const body = z
-          .object({
-            id: z.string().min(1).max(64),
-            name: z.string().min(1).max(120).optional(),
-            description: z.string().max(2000).optional(),
-            kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-            columns: z
-              .array(
-                z.object({
-                  id: z.string().min(1).max(64),
-                  label: z.string().min(1).max(64),
-                  statuses: z.array(z.string().min(1).max(64)).min(1),
-                  kinds: z.array(z.enum(['task', 'ticket', 'decision', 'review'])).optional(),
-                }),
-              )
-              .min(1)
-              .max(20)
-              .optional(),
-            is_default: z.boolean().optional(),
-          })
-          .parse(args);
-        const ref = getDb().collection('boards').doc(body.id);
-        const snap = await ref.get();
-        if (!snap.exists) return { ok: true, value: { error: 'not_found' } };
-        const current = snap.data() as Board;
-        if (body.is_default && !current.is_default) await unsetExistingBoardDefaults();
-        const next: Board = {
-          ...current,
-          ...(body.name !== undefined ? { name: body.name } : {}),
-          ...(body.description !== undefined ? { description: body.description } : {}),
-          ...(body.kinds !== undefined ? { kinds: body.kinds } : {}),
-          ...(body.columns !== undefined ? { columns: body.columns } : {}),
-          ...(body.is_default !== undefined ? { is_default: body.is_default } : {}),
-          updated_at: nowIso(),
-        };
-        await ref.set(next);
-        return { ok: true, value: { board: next } };
-      }
-      case 'worktracker_delete_board': {
-        if (!isAdmin) return { ok: false, error: 'delete_board is admin-only', code: -32603 };
-        const id = z.object({ id: z.string().min(1).max(64) }).parse(args).id;
-        const ref = getDb().collection('boards').doc(id);
-        const snap = await ref.get();
-        if (!snap.exists) return { ok: true, value: { error: 'not_found' } };
-        const current = snap.data() as Board;
-        if (current.is_default) {
-          return { ok: true, value: { error: 'cannot_delete_default', message: 'unset is_default first' } };
-        }
-        await ref.delete();
-        return { ok: true, value: { id, deleted: true } };
-      }
-      default:
-        return { ok: false, error: `unknown tool: ${name}`, code: -32601 };
-    }
-  } catch (err) {
-    // zod validation failures surface here; the protocol
-    // wrappers translate to the appropriate JSON-RPC error
-    // code.
-    return { ok: false, error: (err as Error).message, code: -32602 };
-  }
-}
-
-/**
- * v1 JSON-RPC wrapper around `dispatchTool`. Kept for the
- * existing AI chat (`/api/ai/chat`) and the legacy `/mcp`
- * route — returns the bare `result: { ... }` shape that
- * MiniMax and the existing internal clients parse.
- *
- * For MCP-spec-compliant responses (Anthropic, OpenAI,
- * Hermes SDK validators), use the v2 wrapper in mcp-v2.ts
- * which adds the required `content` array and an optional
- * `structuredContent`.
- */
-export async function handleToolCall(
-  req: JsonRpcRequest,
-  name: string,
-  args: Record<string, unknown>,
-  httpReq: FastifyRequest,
-): Promise<JsonRpcResponse> {
-  const result = await dispatchTool(name, args, httpReq);
-  if (!result.ok) {
-    return rpcError(req, result.code ?? -32603, result.error ?? 'internal error');
-  }
-  return { jsonrpc: '2.0', id: req.id, result: result.value };
-}
-
-async function unsetExistingBoardDefaults(): Promise<void> {
-  const snap = await getDb()
-    .collection('boards')
-    .where('is_default', '==', true)
-    .get();
-  const batch = getDb().batch();
-  for (const doc of snap.docs) {
-    batch.update(doc.ref, { is_default: false, updated_at: nowIso() });
-  }
-  if (snap.docs.length > 0) await batch.commit();
 }

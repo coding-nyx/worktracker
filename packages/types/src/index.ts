@@ -932,3 +932,65 @@ export interface CreateApiTokenResponse {
   /** Plaintext bearer. Shown exactly once. */
   bearer: string;
 }
+
+// =====================================================================
+// MCP tool names (slice 4)
+// =====================================================================
+//
+// The 23 tools exposed on `/mcp` and `/mcp/stream`. Each tool's
+// name is `worktracker.<namespace>.<verb>`; `tools/list` filters the
+// catalog by the bearer's effective scope (read → 7, read_write →
+// 16, admin → 23). The "no tool will fail" promise (architecture
+// v1 §1) holds because the list filter guarantees the caller can
+// see only the tools they can run; `tools/call` re-checks the scope
+// as defense in depth.
+//
+// Adding a tool:
+//   1. Add the dotted name to `MCP_TOOL_NAMES` below.
+//   2. Add an entry in `apps/api/src/mcp-tools.ts` (registry).
+//   3. The typescript `McpToolName` union + the runtime
+//      `MCP_TOOL_NAMES` set are the single source of truth.
+
+export const MCP_NAMESPACES = [
+  'items',
+  'boards',
+  'files',
+  'clients',
+  'connectors',
+  'dispatch',
+  'enrich',
+] as const;
+export type McpNamespace = (typeof MCP_NAMESPACES)[number];
+
+export const MCP_TOOL_NAMES = [
+  // items (7)
+  'worktracker.items.list',
+  'worktracker.items.get',
+  'worktracker.items.create',
+  'worktracker.items.update',
+  'worktracker.items.comment',
+  'worktracker.items.link',
+  'worktracker.items.unlink',
+  // boards (5)
+  'worktracker.boards.list',
+  'worktracker.boards.get',
+  'worktracker.boards.create',
+  'worktracker.boards.update',
+  'worktracker.boards.delete',
+  // files (3)
+  'worktracker.files.list',
+  'worktracker.files.get',
+  'worktracker.files.upload',
+  // clients (4)
+  'worktracker.clients.list',
+  'worktracker.clients.mint',
+  'worktracker.clients.rotate',
+  'worktracker.clients.introspect',
+  // connectors (2)
+  'worktracker.connectors.list',
+  'worktracker.connectors.get',
+  // dispatch + enrich (2)
+  'worktracker.dispatch.run',
+  'worktracker.enrich.run',
+] as const;
+export type McpToolName = (typeof MCP_TOOL_NAMES)[number];

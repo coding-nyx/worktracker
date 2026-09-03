@@ -15,10 +15,15 @@ import { useEffect, useState } from 'react';
  *   - auth         the bearer token model
  *   - initialize   the JSON-RPC 2.0 handshake
  *   - discovery    tools/list
- *   - items        10 work-item tools
+ *   - items        7 work-item tools
  *   - boards       5 board tools
+ *   - files        3 file tools
+ *   - clients      4 client tools (introspect is read, the rest admin)
+ *   - connectors   2 admin tools
+ *   - dispatch     1 high-level tool
+ *   - enrich       1 standalone enrichment tool
  *   - example      end-to-end with curl
- *   - clients      Claude Desktop, Cursor, custom
+ *   - setup        Claude Desktop, Cursor, custom
  *   - errors       JSON-RPC codes + HTTP status
  */
 export default function DocsPage() {
@@ -49,7 +54,7 @@ export default function DocsPage() {
         <div className="space-y-1.5">
           <span className="eyebrow">// mcp · v0.1</span>
           <p className="font-mono text-[10.5px] uppercase tracking-mono-wide text-ink-3">
-            json-rpc 2.0 · 15 tools
+            json-rpc 2.0 · 23 tools
           </p>
         </div>
         <nav className="mt-5 space-y-px" aria-label="Documentation sections">
@@ -59,10 +64,13 @@ export default function DocsPage() {
             { id: 'auth',        label: 'Auth' },
             { id: 'initialize',  label: 'Initialize' },
             { id: 'discovery',   label: 'Discovery' },
-            { id: 'items',       label: 'Items (10)' },
+            { id: 'items',       label: 'Items (7)' },
             { id: 'boards',      label: 'Boards (5)' },
+            { id: 'files',       label: 'Files (3)' },
+            { id: 'clients',     label: 'Clients (4)' },
+            { id: 'connectors',  label: 'Connectors (2)' },
+            { id: 'dispatch',    label: 'Dispatch + Enrich' },
             { id: 'example',     label: 'Example' },
-            { id: 'clients',     label: 'Clients' },
             { id: 'errors',      label: 'Errors' },
           ].map((s) => {
             const isActive = active === s.id;
@@ -97,7 +105,7 @@ export default function DocsPage() {
             WorkTracker MCP reference
           </h1>
           <p className="max-w-2xl text-[14px] leading-6 text-ink-2">
-            The Model Context Protocol integration for WorkTracker. JSON-RPC 2.0 over HTTP POST — the same brain the web UI uses, exposed as 15 tools that any MCP client can call.
+            The Model Context Protocol integration for WorkTracker. JSON-RPC 2.0 over HTTP POST — the same brain the web UI uses, exposed as 23 dotted-namespace tools (read: 7, read_write: 9, admin: 7) that any MCP client can call.
           </p>
         </header>
 
@@ -110,7 +118,7 @@ export default function DocsPage() {
             {[
               { k: 'transport', v: 'http · json-rpc 2.0' },
               { k: 'protocol',  v: '2024-11-05' },
-              { k: 'tools',     v: '15 (10 items + 5 boards)' },
+              { k: 'tools',     v: '23 (7 read · 9 rw · 7 admin)' },
             ].map((s) => (
               <div key={s.k} className="card-inset px-3 py-2.5">
                 <p className="font-mono text-[10px] uppercase tracking-mono-widest text-brand-500">{s.k}</p>
@@ -216,10 +224,10 @@ curl -H "Authorization: Bearer $WT_TOKEN" ...`}
   "jsonrpc": "2.0", "id": 2,
   "result": {
     "tools": [
-      { "name": "worktracker_list_items",   "description": "…", "inputSchema": { … } },
-      { "name": "worktracker_create_item",  "description": "…", "inputSchema": { … } },
-      { "name": "worktracker_transition",   "description": "…", "inputSchema": { … } },
-      // … 12 more
+      { "name": "worktracker.items.list",   "description": "…", "inputSchema": { … } },
+      { "name": "worktracker.items.create", "description": "…", "inputSchema": { … } },
+      { "name": "worktracker.items.update", "description": "…", "inputSchema": { … } },
+      // … 20 more, namespaced across 7 namespaces
     ]
   }
 }`}
@@ -227,9 +235,9 @@ curl -H "Authorization: Bearer $WT_TOKEN" ...`}
         </Section>
 
         {/* === Items === */}
-        <Section id="items" eyebrow="// items · 10 tools" title="Work items">
+        <Section id="items" eyebrow="// items · 7 tools" title="Work items">
           <p className="text-[14px] leading-6 text-ink-2">
-            Every item tool except where noted is open to any authenticated source. <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">expected_version</code> on mutations is the optimistic-concurrency token — bump it on every change.
+            <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">worktracker.items.update</code> is the single mutation path: setting <code className="rounded-sm bg-bg-sunken px-1 py-0.5 font-mono text-[11.5px] text-ink-1">status</code> in the patch is folded into a transition (the state machine gates it); setting <code className="rounded-sm bg-bg-sunken px-1 py-0.5 font-mono text-[11.5px] text-ink-1">archived_at</code> is folded into archive. <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">expected_version</code> on every mutation is the optimistic-concurrency token.
           </p>
           <div className="mt-4 space-y-3">
             {ITEM_TOOLS.map((t) => (
@@ -241,10 +249,58 @@ curl -H "Authorization: Bearer $WT_TOKEN" ...`}
         {/* === Boards === */}
         <Section id="boards" eyebrow="// boards · 5 tools" title="Boards">
           <p className="text-[14px] leading-6 text-ink-2">
-            Boards are saved views — a list of columns (label + status mapping) and an optional kind filter. Reads are open; writes require the admin token.
+            Boards are saved views — a list of columns (label + status mapping) and an optional kind filter. Reads are open; writes require the admin scope.
           </p>
           <div className="mt-4 space-y-3">
             {BOARD_TOOLS.map((t) => (
+              <ToolCard key={t.name} {...t} />
+            ))}
+          </div>
+        </Section>
+
+        {/* === Files === */}
+        <Section id="files" eyebrow="// files · 3 tools" title="Files">
+          <p className="text-[14px] leading-6 text-ink-2">
+            Attachments live in <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">files/{`{file_id}`}</code> as inline base64. 1 MB per file, 10 MB per item. <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">worktracker.files.get</code> returns metadata only — the actual bytes are served by the REST <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">GET /api/files/{`:id`}</code> endpoint, because the MCP JSON-RPC envelope is JSON and can&apos;t carry binary cleanly.
+          </p>
+          <div className="mt-4 space-y-3">
+            {FILE_TOOLS.map((t) => (
+              <ToolCard key={t.name} {...t} />
+            ))}
+          </div>
+        </Section>
+
+        {/* === Clients === */}
+        <Section id="clients" eyebrow="// clients · 4 tools" title="Clients">
+          <p className="text-[14px] leading-6 text-ink-2">
+            <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">worktracker.clients.introspect</code> is read-scope; the other three are admin-only. The introspect response includes <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">visible_tools</code> so a client can render its own palette without making a separate <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">tools/list</code> call.
+          </p>
+          <div className="mt-4 space-y-3">
+            {CLIENT_TOOLS.map((t) => (
+              <ToolCard key={t.name} {...t} />
+            ))}
+          </div>
+        </Section>
+
+        {/* === Connectors === */}
+        <Section id="connectors" eyebrow="// connectors · 2 tools" title="Connectors">
+          <p className="text-[14px] leading-6 text-ink-2">
+            Admin-only. Connectors are outbound integrations the API talks to (mirror, webhook-in, webhook-out, bridge). The actual <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">protocol</code> impls are wired in slice 5+.
+          </p>
+          <div className="mt-4 space-y-3">
+            {CONNECTOR_TOOLS.map((t) => (
+              <ToolCard key={t.name} {...t} />
+            ))}
+          </div>
+        </Section>
+
+        {/* === Dispatch + Enrich === */}
+        <Section id="dispatch" eyebrow="// dispatch + enrich" title="Dispatch and enrich">
+          <p className="text-[14px] leading-6 text-ink-2">
+            <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">worktracker.dispatch.run</code> is the highest-level tool: it enqueues the right sequence of commands (board move, status transition, enrichment) in one call. <code className="rounded-sm bg-bg-sunken px-1.5 py-0.5 font-mono text-[12px] text-ink-1">worktracker.enrich.run</code> is a standalone Grill/Wayfind kick-off.
+          </p>
+          <div className="mt-4 space-y-3">
+            {DISPATCH_TOOLS.map((t) => (
               <ToolCard key={t.name} {...t} />
             ))}
           </div>
@@ -279,7 +335,7 @@ curl -sS -X POST https://worktracker-nyx.web.app/mcp \\
   -H "Content-Type: application/json" \\
   -H "Accept: application/json, text/event-stream" \\
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
-       "params":{"name":"worktracker_create_board",
+       "params":{"name":"worktracker.boards.create",
                  "arguments":{"name":"Today",
                               "columns":[
                                 {"id":"doing","label":"Doing","statuses":["in_progress"]},
@@ -371,30 +427,50 @@ Content-Type: application/json
 
 type ToolDef = {
   name: string;
-  auth: 'any' | 'admin';
+  auth: 'read' | 'read_write' | 'admin' | 'any';
   purpose: string;
   params?: { name: string; kind: string; required: boolean; note?: string }[];
 };
 
 const ITEM_TOOLS: ToolDef[] = [
-  { name: 'worktracker_list_items',   auth: 'any',   purpose: 'List items, optionally filtered by kind / status / source / owner / q (search), paginated by limit (default 50, max 200). Set include_archived=true to include archived items.' },
-  { name: 'worktracker_get_item',     auth: 'any',   purpose: 'Fetch one item by id, with its full event timeline.' },
-  { name: 'worktracker_create_item',  auth: 'any',   purpose: 'Queue a create command. Returns { command_id, status: "queued" }; the brain materializes the item asynchronously.' },
-  { name: 'worktracker_update_item',  auth: 'any',   purpose: 'Queue an update command with a patch of allowed fields and expected_version for optimistic concurrency.' },
-  { name: 'worktracker_transition',   auth: 'any',   purpose: 'Queue a transition command to to_status. expected_version is required. comment is optional. force_dispatch skips enrichment.' },
-  { name: 'worktracker_comment',      auth: 'any',   purpose: 'Append a comment event to an item\u2019s timeline.' },
-  { name: 'worktracker_link_items',   auth: 'any',   purpose: 'Create a typed relationship: parent_id \u2192 child_id with kind \u2208 { depends_on, blocks, related, mirrors, parent_of }.' },
-  { name: 'worktracker_set_reminder', auth: 'any',   purpose: 'Attach a reminder at remind_at to be delivered on channel to target. v0.5 stub.' },
-  { name: 'worktracker_enrich',       auth: 'any',   purpose: 'Run Grill or Wayfind on an item. stage \u2208 { grill, wayfind, both }. v0 stretch.' },
-  { name: 'worktracker_dispatch',     auth: 'any',   purpose: 'High-level: pre-flight + missing enrichment + transition. options.force skips gating checks. Returns a job id.' },
+  { name: 'worktracker.items.list',    auth: 'read',       purpose: 'List items, optionally filtered by kind / status / source / owner / board_id (use "backlog" for board_id: null) / q (search) / limit (default 50, max 200). Set include_archived=true to include archived items.' },
+  { name: 'worktracker.items.get',     auth: 'read',       purpose: 'Fetch one item by id, with its full event timeline and file pointer list.' },
+  { name: 'worktracker.items.create',  auth: 'read_write', purpose: 'Queue a create command. Validates per-kind data strictly (TaskData / TicketData / DecisionData / ReviewData). Returns { command_id, status: "queued" }.' },
+  { name: 'worktracker.items.update',  auth: 'read_write', purpose: 'Patch fields with expected_version for optimistic concurrency. A patch that sets status is folded into a transition (state machine gate fires); a patch that sets archived_at is folded into archive.' },
+  { name: 'worktracker.items.comment', auth: 'read_write', purpose: 'Append a comment event to an item\u2019s timeline. Does not bump the item version.' },
+  { name: 'worktracker.items.link',    auth: 'read_write', purpose: 'Create a typed relationship: parent_id \u2192 child_id with kind \u2208 { depends_on, blocks, related, mirrors, parent_of }.' },
+  { name: 'worktracker.items.unlink',  auth: 'read_write', purpose: 'Remove a link by (parent_id, child_id, kind). No-op if no matching link exists.' },
 ];
 
 const BOARD_TOOLS: ToolDef[] = [
-  { name: 'worktracker_list_boards',  auth: 'any',   purpose: 'List all boards with full column definitions and the is_default flag.' },
-  { name: 'worktracker_get_board',    auth: 'any',   purpose: 'Fetch one board by id.' },
-  { name: 'worktracker_create_board', auth: 'admin', purpose: 'Create a board. Pass is_default: true to make it the landing view (unsets the existing default in the same batch).' },
-  { name: 'worktracker_update_board', auth: 'admin', purpose: 'Update name / description / kinds / columns / is_default. Omit a field to keep its current value.' },
-  { name: 'worktracker_delete_board', auth: 'admin', purpose: 'Delete a board. The default board cannot be deleted \u2014 set another board as default first.' },
+  { name: 'worktracker.boards.list',   auth: 'read',   purpose: 'List all boards, ordered by name, with the is_default flag marking the landing view.' },
+  { name: 'worktracker.boards.get',    auth: 'read',   purpose: 'Fetch one board by id, including its column definitions and kind filter.' },
+  { name: 'worktracker.boards.create', auth: 'admin',  purpose: 'Create a board. Pass is_default: true to make it the landing view (unsets the existing default in the same batch).' },
+  { name: 'worktracker.boards.update', auth: 'admin',  purpose: 'Update name / description / kinds / columns / is_default. Omit a field to keep its current value.' },
+  { name: 'worktracker.boards.delete', auth: 'admin',  purpose: 'Delete a board. The default board cannot be deleted \u2014 set another board as default first.' },
+];
+
+const FILE_TOOLS: ToolDef[] = [
+  { name: 'worktracker.files.list',    auth: 'read',       purpose: 'List file pointers attached to an item (metadata only). Bytes live in files/{file_id}.' },
+  { name: 'worktracker.files.get',     auth: 'read',       purpose: 'Fetch a file\u2019s metadata by id. The actual bytes are served by the REST GET /api/files/:id endpoint (the MCP JSON-RPC envelope can\u2019t carry binary).' },
+  { name: 'worktracker.files.upload',  auth: 'read_write', purpose: 'Attach a base64-encoded file to an item. 1 MB per file, 10 MB per item. Returns { file_id, file }.' },
+];
+
+const CLIENT_TOOLS: ToolDef[] = [
+  { name: 'worktracker.clients.introspect', auth: 'read',   purpose: '"Who am I" — returns the caller\u2019s name, kind, scope, owner_uid, last_used_at, capabilities, server_version, and the list of tool names this scope can see.' },
+  { name: 'worktracker.clients.list',       auth: 'admin',  purpose: 'List all clients (agents + users) with their scope, last_used_at, and capabilities.' },
+  { name: 'worktracker.clients.mint',       auth: 'admin',  purpose: 'Mint a new kind: user client (personal access token). Returns the bearer exactly once.' },
+  { name: 'worktracker.clients.rotate',     auth: 'admin',  purpose: 'Rotate a kind: user client\u2019s bearer. The old bearer is invalidated immediately. Returns the new bearer once.' },
+];
+
+const CONNECTOR_TOOLS: ToolDef[] = [
+  { name: 'worktracker.connectors.list', auth: 'admin', purpose: 'List all connectors (mirror, webhook-in, webhook-out, bridge) with their protocol and last-run status.' },
+  { name: 'worktracker.connectors.get',  auth: 'admin', purpose: 'Fetch one connector by name, including its kind-specific config.' },
+];
+
+const DISPATCH_TOOLS: ToolDef[] = [
+  { name: 'worktracker.dispatch.run', auth: 'read_write', purpose: 'High-level tool: pre-flight + missing enrichment + transition. Extended: can move Backlog \u2192 board (item_id + options.board_id + options.to_status). Returns the queued command ids.' },
+  { name: 'worktracker.enrich.run',   auth: 'read_write', purpose: 'Standalone Grill / Wayfind run. Enqueues an enrich command; the brain writes the enrichment_state and an event.' },
 ];
 
 const RPC_ERRORS = [

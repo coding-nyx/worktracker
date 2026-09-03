@@ -241,11 +241,12 @@ export async function clientsRoutes(app: FastifyInstance): Promise<void> {
  * determines which tools they see.
  */
 async function introspectTools(auth: NonNullable<FastifyRequest['auth']>): Promise<string[]> {
-  // Lazy import to avoid a circular dep at module load.
-  const { TOOLS } = await import('../mcp.js');
-  const SCOPE_RANK: Record<ApiTokenScope, number> = { read: 1, read_write: 2, admin: 3 };
+  // Lazy import to avoid a circular dep at module load. Slice 4:
+  // the registry replaces the old inline `TOOLS` array; the
+  // visible_tools set is the same shape the MCP `tools/list`
+  // returns, so a client can render its own palette from
+  // `/api/clients/introspect` without making a separate call.
+  const { listToolsForScope } = await import('../mcp-tools.js');
   const scope: ApiTokenScope = auth.scope ?? (auth.kind === 'admin' ? 'admin' : 'read_write');
-  return (TOOLS as ReadonlyArray<{ name: string; required_scope?: ApiTokenScope }>)
-    .filter((t) => SCOPE_RANK[scope] >= SCOPE_RANK[t.required_scope ?? 'read'])
-    .map((t) => t.name);
+  return listToolsForScope(scope).map((t) => t.name);
 }
