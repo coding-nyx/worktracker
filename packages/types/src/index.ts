@@ -4,6 +4,13 @@
  * connector implementation. Bump the version when these change.
  */
 
+export {
+  canTransition,
+  getValidTransitions,
+  isTerminal,
+} from './state-machine.js';
+export type { TransitionRejection, TransitionResult } from './state-machine.js';
+
 // =====================================================================
 // Work item kinds and status enums
 // =====================================================================
@@ -91,6 +98,103 @@ export interface EnrichmentState {
 }
 
 // =====================================================================
+// Per-kind rich `data` shape (slice 3)
+// =====================================================================
+//
+// `WorkItem.data` is the typed, per-kind structured payload. The
+// shape is validated strictly on write (see `apps/api/src/data-schemas.ts`)
+// so the detail view can render it without "any" escape hatches.
+// The shapes are intentionally narrow — the free-form `data_map`
+// is the "everything else" bucket (sprint, team, capacity, etc.).
+
+export interface TaskData {
+  estimate_minutes?: number;
+  acceptance_criteria?: string[];
+  tags?: string[];
+}
+
+export interface TicketData {
+  severity: Severity;
+  customer?: string;
+  reproduction?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  title: string;
+  body?: string;
+}
+
+export interface DecisionData {
+  options: DecisionOption[];
+  chosen_option_id?: string;
+  rationale?: string;
+}
+
+export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
+
+export interface ReviewData {
+  reviewer?: string;
+  rubric?: string;
+  verdict?: ReviewVerdict;
+}
+
+/**
+ * The free-form data_map: scalar values only (string | number |
+ * boolean | null). It's the escape hatch for fields the per-kind
+ * schema doesn't know about. Indexed in Firestore for filter/sort.
+ */
+export type WorkItemDataMapValue = string | number | boolean | null;
+export type WorkItemDataMap = Record<string, WorkItemDataMapValue>;
+
+/**
+ * A structured analysis result produced by the Enricher (Grill +
+ * Wayfind). The `sections` array lets a long analysis stay scannable
+ * — each section is a labeled block the detail view can render as
+ * a card.
+ */
+export interface AnalysisSection {
+  heading: string;
+  body: string;
+}
+
+export interface WorkItemAnalysis {
+  summary: string;
+  sections: AnalysisSection[];
+}
+
+/**
+ * A file attached to a work item. The actual bytes live in the
+ * `files/{file_id}` collection (1 MB max per file, 10 MB max per
+ * item) — the work item only stores the pointer + metadata so the
+ * kanban list query stays cheap.
+ */
+export interface WorkItemFile {
+  file_id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  added_at: string;
+  /** sha256 of the file content, for dedup. */
+  content_sha256?: string;
+}
+
+/** Stored at `files/{file_id}`. The `content_b64` is the only field
+ *  that makes the doc large; everything else is metadata for the
+ *  listing endpoint. */
+export interface FileRecord {
+  file_id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  content_b64: string;
+  owner_item_id: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  content_sha256?: string;
+}
+
+// =====================================================================
 // Work item document
 // =====================================================================
 
@@ -112,6 +216,24 @@ export interface WorkItem {
   parent_id: string | null;
   group_id: string | null;
   archived_at: string | null;
+  // Slice 3 — rich data + board association
+  /**
+   * The board this item belongs to, or `null` for the Backlog.
+   * Slice 3: items are no longer filter-by-kind on the board; they
+   * are owned by a specific board (or the un-boarded backlog).
+   */
+  board_id: string | null;
+  /** Strict per-kind typed payload. Validated on every write. */
+  data: Record<string, unknown>;
+  /** Free-form scalar key/value map. Filter / sort key bag. */
+  data_map: WorkItemDataMap;
+  /** Pointer into `files/{file_id}` for the implementation plan. */
+  plan_file_id: string | null;
+  /** Structured analysis from Grill/Wayfind. */
+  analysis: WorkItemAnalysis | null;
+  /** Attachments (≤1 MB each, ≤10 MB per item). Pointers into
+   *  `files/{file_id}`; the doc body is the metadata. */
+  files: WorkItemFile[];
   created_at: string;
   updated_at: string;
   version: number; // optimistic concurrency
@@ -413,6 +535,13 @@ export interface CreateCommandPayload {
   due_at?: string;
   parent_id?: string;
   group_id?: string;
+  /** Slice 3 — which board this item belongs to. Omit for Backlog. */
+  board_id?: string | null;
+  /** Slice 3 — per-kind typed payload. Validated against the kind's
+   *  Zod schema (`apps/api/src/data-schemas.ts`) on every write. */
+  data?: Record<string, unknown>;
+  /** Slice 3 — free-form scalar key/value map. */
+  data_map?: WorkItemDataMap;
 }
 
 export interface UpdateCommandPayload {
@@ -429,6 +558,10 @@ export interface UpdateCommandPayload {
       | 'group_id'
       | 'enricher'
       | 'source_meta'
+      | 'board_id'
+      | 'data'
+      | 'data_map'
+      | 'plan_file_id'
     >
   >;
   expected_version: number;
@@ -556,6 +689,12 @@ export interface ListItemsQuery {
   cursor?: string;
   limit?: number;
   include_archived?: boolean;
+  /**
+   * Slice 3 — filter by board. Pass an empty string `''` to mean
+   * "Backlog" (items with `board_id: null`). The server treats the
+   * special string `'null'` (or the empty string) as the Backlog.
+   */
+  board_id?: string | null;
 }
 
 export interface ListItemsResponse {

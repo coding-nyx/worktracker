@@ -132,6 +132,10 @@ async function seedItem(partial: {
   source: string;
   owner?: string | null;
   due_at?: string | null;
+  // Slice 3 — board + rich data.
+  board_id?: string | null;
+  data?: Record<string, unknown>;
+  data_map?: Record<string, string | number | boolean | null>;
 }): Promise<string> {
   const itemId = `item-${Math.random().toString(36).slice(2, 10)}`;
   const ts = now();
@@ -156,6 +160,15 @@ async function seedItem(partial: {
       parent_id: null,
       group_id: null,
       archived_at: null,
+      // Slice 3 — board + rich data. The default is Backlog
+      // (board_id: null); seeded items below pin a real board
+      // once `seedBoards` runs.
+      board_id: partial.board_id ?? null,
+      data: partial.data ?? {},
+      data_map: partial.data_map ?? {},
+      plan_file_id: null,
+      analysis: null,
+      files: [],
       created_at: ts,
       updated_at: ts,
       version: 1,
@@ -233,7 +246,37 @@ async function main(): Promise<void> {
     scope: 'read',
   });
 
-  // 2. Work items.
+  // 2. Boards. Slice 3 — items are owned by a board (or the
+  // Backlog, when board_id is null). Seed one default board so
+  // the seeded items can land somewhere; the operator can create
+  // more from /admin/boards.
+  const defaultBoardId = `board-${Math.random().toString(36).slice(2, 10)}`;
+  await fy(`/boards/${defaultBoardId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(fyDoc({
+      id: defaultBoardId,
+      name: 'Today',
+      description: 'Default work board. Tasks and tickets together.',
+      columns: [
+        { id: 'doing',   label: 'Doing',   statuses: ['in_progress', 'triaged'] },
+        { id: 'ready',   label: 'Ready',   statuses: ['ready', 'proposed', 'pending'] },
+        { id: 'review',  label: 'Review',  statuses: ['changes_requested', 'approved', 'merged'] },
+        { id: 'done',    label: 'Done',    statuses: ['done', 'resolved', 'accepted', 'closed'] },
+        { id: 'block',   label: 'Blocked', statuses: ['blocked'] },
+        { id: 'back',    label: 'Backlog', statuses: ['open'] },
+      ],
+      kinds: null,
+      is_default: true,
+      created_at: now(),
+      updated_at: now(),
+    })),
+  });
+  console.log(`  ✓ board "${defaultBoardId}" created (Today, default)`);
+
+  // 3. Work items. Slice 3 — most pin to the default board;
+  // a couple stay in the Backlog (board_id: null) to exercise
+  // the backlog view.
   const today = new Date();
   const inDays = (n: number) =>
     new Date(today.getTime() + n * 24 * 60 * 60 * 1000).toISOString();
@@ -247,6 +290,9 @@ async function main(): Promise<void> {
     source: 'hermes',
     owner: 'worktracker',
     due_at: inDays(2),
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 240, tags: ['hermes', 'mirror', 'v0'] },
+    data_map: { sprint: 'v0.5', team: 'integrations' },
   });
   await seedItem({
     kind: 'task',
@@ -256,6 +302,9 @@ async function main(): Promise<void> {
     priority: 'high',
     source: 'web',
     due_at: inDays(1),
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 480, tags: ['web', 'kanban'] },
+    data_map: { sprint: 'v0.5', team: 'web' },
   });
   await seedItem({
     kind: 'task',
@@ -265,6 +314,9 @@ async function main(): Promise<void> {
     priority: 'medium',
     source: 'mavis',
     due_at: inDays(5),
+    // No board_id — lives in the Backlog.
+    data: { estimate_minutes: 60, tags: ['docs', 'brain'] },
+    data_map: { sprint: 'v0.5' },
   });
   await seedItem({
     kind: 'task',
@@ -273,6 +325,8 @@ async function main(): Promise<void> {
     priority: 'low',
     source: 'web',
     due_at: inDays(14),
+    // No board_id — lives in the Backlog.
+    data: { tags: ['mac-daemon', 'reminders'] },
   });
   await seedItem({
     kind: 'task',
@@ -280,12 +334,16 @@ async function main(): Promise<void> {
     status: 'blocked',
     priority: 'medium',
     source: 'mavis',
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 120, tags: ['connectors', 'enrichment'] },
   });
   await seedItem({
     kind: 'task',
     title: 'Document REST + MCP API surface',
     status: 'done',
     source: 'codex',
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 90, tags: ['docs', 'mcp'] },
   });
   await seedItem({
     kind: 'ticket',
@@ -294,6 +352,9 @@ async function main(): Promise<void> {
     status: 'triaged',
     severity: 'medium',
     source: 'cline',
+    board_id: defaultBoardId,
+    // ticket.data requires `severity` (the per-kind strict schema).
+    data: { severity: 'medium', customer: 'internal', reproduction: 'POST /api/items with stale expected_version' },
   });
   await seedItem({
     kind: 'decision',
@@ -301,15 +362,28 @@ async function main(): Promise<void> {
     body: 'Discussion: separate project from AXUIKit, no Cliq usage, want tight DX. Picked Firebase.',
     status: 'accepted',
     source: 'mavis',
+    board_id: defaultBoardId,
+    // decision.data requires at least one option.
+    data: {
+      options: [
+        { id: 'firebase',  title: 'Firebase / Cloud Run' },
+        { id: 'catalyst',  title: 'Zoho Catalyst' },
+      ],
+      chosen_option_id: 'firebase',
+      rationale: 'Tighter DX, separate from AXUIKit, no Cliq usage.',
+    },
   });
   await seedItem({
     kind: 'review',
     title: 'Review FCM push-notification path for v0.5',
     status: 'pending',
     source: 'codex',
+    board_id: defaultBoardId,
+    // review.data has all fields optional.
+    data: { reviewer: 'nyx', verdict: 'comment' },
   });
 
-  // 3. Save the hermes api key for downstream smoke tests.
+  // 4. Save the hermes api key for downstream smoke tests.
   const { writeFileSync } = await import('node:fs');
   writeFileSync(
     new URL('../.local-secrets.json', import.meta.url),

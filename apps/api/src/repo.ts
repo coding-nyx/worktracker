@@ -20,7 +20,9 @@ import type {
   WorkItemStatus,
 } from '@worktracker/types';
 import { ulid, nowIso } from './ids.js';
-import { VersionConflictError, NotFoundError } from './errors.js';
+import { VersionConflictError, NotFoundError, InvalidInputError } from './errors.js';
+import { canTransition } from '@worktracker/types';
+import { validateItemData } from './data-schemas.js';
 
 export interface ApplyContext {
   db: Firestore;
@@ -58,12 +60,37 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
     const id = command.item_id ?? ulid();
     const finalRef = db.collection('work_items').doc(id);
     const now = nowIso();
+    const kind = command.payload.kind;
+    // Validate per-kind `data` strictly. Throws ZodError on
+    // failure; the brain's catch path maps that to a `rejected`
+    // command with `code: 'invalid_data'`.
+    const validatedData = command.payload.data
+      ? validateItemData(command.payload.data, kind)
+      : {};
+    // Sanity-check the initial status against the kind, so a
+    // `task` with status `triaged` (a ticket-only status) is
+    // rejected at the door instead of slipping through to the
+    // state machine which would then reject it without context.
+    const initialStatus = command.payload.status ?? defaultStatusFor(kind);
+    if (command.payload.status && command.payload.status !== defaultStatusFor(kind)) {
+      // The state machine's getValidTransitions is keyed by
+      // (kind, from), so we use it backwards: from = the default
+      // for the kind, to = the requested status. If the default
+      // can't reach the requested status, reject.
+      const result = canTransition(defaultStatusFor(kind), command.payload.status, kind);
+      if (!result.ok) {
+        throw new InvalidInputError(
+          `initial status '${command.payload.status}' is not reachable for ${kind}`,
+          { kind, status: command.payload.status, allowed: result.reason.allowed },
+        );
+      }
+    }
     const item: WorkItem = {
       id,
-      kind: command.payload.kind,
+      kind,
       title: command.payload.title,
       body: command.payload.body ?? null,
-      status: command.payload.status ?? defaultStatusFor(command.payload.kind),
+      status: initialStatus,
       severity: command.payload.severity ?? null,
       priority: command.payload.priority ?? null,
       source: command.source,
@@ -76,6 +103,13 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
       parent_id: command.payload.parent_id ?? null,
       group_id: command.payload.group_id ?? null,
       archived_at: null,
+      // Slice 3 — rich data + board association.
+      board_id: command.payload.board_id ?? null,
+      data: validatedData,
+      data_map: command.payload.data_map ?? {},
+      plan_file_id: null,
+      analysis: null,
+      files: [],
       created_at: now,
       updated_at: now,
       version: 1,
@@ -124,9 +158,16 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
 
   switch (command.op) {
     case 'update': {
+      // If the patch includes `data`, validate it strictly against
+      // the per-kind Zod schema. The shape is allowed to shrink
+      // (e.g. a task clearing its `tags`) but not to drift.
+      const patch = { ...command.payload.patch };
+      if ('data' in patch && patch.data !== undefined) {
+        patch.data = validateItemData(patch.data, current.kind);
+      }
       const next: WorkItem = {
         ...current,
-        ...command.payload.patch,
+        ...patch,
         updated_at: nowIso(),
         version: current.version + 1,
       };
@@ -153,6 +194,20 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
     case 'transition': {
       const fromStatus = current.status;
       const toStatus = command.payload.to_status;
+      // Slice 3 — gate on the state machine. A bad move is a
+      // structured rejection (`code: 'invalid_transition'`), not a
+      // silent no-op. The brain records the reason on the conflict
+      // log; the web renders it in the mono `[err]` block.
+      const result = canTransition(fromStatus, toStatus, current.kind);
+      if (!result.ok) {
+        throw new InvalidInputError(result.reason.message, {
+          code: result.reason.code,
+          from: result.reason.from,
+          to: result.reason.to,
+          kind: result.reason.kind,
+          allowed: result.reason.allowed,
+        });
+      }
       if (fromStatus === toStatus) {
         // Idempotent: no-op.
         return null;

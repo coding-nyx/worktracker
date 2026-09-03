@@ -160,6 +160,8 @@ export async function buildApp(): Promise<FastifyInstance> {
   await clientsRoutes(app);
   const { connectorsRoutes } = await import('./routes/connectors.js');
   await connectorsRoutes(app);
+  const { filesRoutes } = await import('./routes/files.js');
+  await filesRoutes(app);
   const { commandsRoutes } = await import('./routes/commands.js');
   await commandsRoutes(app);
   const { commandsAdminRoutes } = await import('./routes/commands-admin.js');

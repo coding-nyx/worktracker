@@ -31,7 +31,18 @@ const ListQuerySchema = z.object({
     .union([z.literal('true'), z.literal('false')])
     .optional()
     .transform((v) => v === 'true'),
+  /**
+   * Slice 3 — filter by board. Pass `'null'` (or leave absent) to
+   * mean "any board" (the default). Pass a real id to scope to a
+   * board. Pass `'backlog'` to scope to items with `board_id: null`.
+   * The server rewrites `'backlog'` to `where('board_id', '==', null)`.
+   */
+  board_id: z.string().optional(),
 });
+
+const DataMapSchema = z.record(
+  z.union([z.string().max(2000), z.number(), z.boolean(), z.null()]),
+);
 
 const CreateSchema = z.object({
   kind: z.enum(['task', 'ticket', 'decision', 'review']),
@@ -46,6 +57,10 @@ const CreateSchema = z.object({
   due_at: z.string().datetime().optional(),
   parent_id: z.string().optional(),
   group_id: z.string().optional(),
+  // Slice 3 — board association + rich data.
+  board_id: z.string().nullable().optional(),
+  data: z.record(z.unknown()).optional(),
+  data_map: DataMapSchema.optional(),
 });
 
 const UpdateSchema = z.object({
@@ -61,6 +76,11 @@ const UpdateSchema = z.object({
       group_id: z.string().nullable().optional(),
       enricher: z.string().nullable().optional(),
       source_meta: z.record(z.unknown()).optional(),
+      // Slice 3 — board move + rich data patches.
+      board_id: z.string().nullable().optional(),
+      data: z.record(z.unknown()).optional(),
+      data_map: DataMapSchema.optional(),
+      plan_file_id: z.string().nullable().optional(),
     })
     .strict(),
   expected_version: z.number().int().min(0),
@@ -96,6 +116,17 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
     if (query.status) ref = ref.where('status', '==', query.status);
     if (query.source) ref = ref.where('source', '==', query.source);
     if (query.owner) ref = ref.where('owner', '==', query.owner);
+    if (query.board_id) {
+      if (query.board_id === 'backlog') {
+        // Items that have no board — the un-boarded queue.
+        // Firestore's `where('board_id', '==', null)` matches docs
+        // where the field is explicitly null (verified against the
+        // live data).
+        ref = ref.where('board_id', '==', null);
+      } else {
+        ref = ref.where('board_id', '==', query.board_id);
+      }
+    }
     if (query.cursor) {
       const cursorSnap = await getDb().collection('work_items').doc(query.cursor).get();
       if (cursorSnap.exists) ref = ref.startAfter(cursorSnap);
@@ -161,6 +192,10 @@ export async function itemsRoutes(app: FastifyInstance): Promise<void> {
         due_at: body.due_at,
         parent_id: body.parent_id,
         group_id: body.group_id,
+        // Slice 3.
+        board_id: body.board_id ?? null,
+        data: body.data,
+        data_map: body.data_map,
       },
       status: 'queued',
       error: null,
