@@ -1,5 +1,5 @@
 /**
- * Cloud Functions entry (just the brain trigger now).
+ * Cloud Functions entry (brain trigger).
  */
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { setGlobalOptions } from 'firebase-functions/v2/options';

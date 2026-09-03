@@ -17,7 +17,8 @@
     "src/errors.ts",
     "src/repo.ts",
     "src/auth.ts",
-    "src/config.ts"
+    "src/config.ts",
+    "src/trace.ts"
   ],
   "exclude": [
     "node_modules",
