@@ -4,6 +4,13 @@
  * connector implementation. Bump the version when these change.
  */
 
+export {
+  canTransition,
+  getValidTransitions,
+  isTerminal,
+} from './state-machine.js';
+export type { TransitionRejection, TransitionResult } from './state-machine.js';
+
 // =====================================================================
 // Work item kinds and status enums
 // =====================================================================
@@ -91,6 +98,103 @@ export interface EnrichmentState {
 }
 
 // =====================================================================
+// Per-kind rich `data` shape (slice 3)
+// =====================================================================
+//
+// `WorkItem.data` is the typed, per-kind structured payload. The
+// shape is validated strictly on write (see `apps/api/src/data-schemas.ts`)
+// so the detail view can render it without "any" escape hatches.
+// The shapes are intentionally narrow — the free-form `data_map`
+// is the "everything else" bucket (sprint, team, capacity, etc.).
+
+export interface TaskData {
+  estimate_minutes?: number;
+  acceptance_criteria?: string[];
+  tags?: string[];
+}
+
+export interface TicketData {
+  severity: Severity;
+  customer?: string;
+  reproduction?: string;
+}
+
+export interface DecisionOption {
+  id: string;
+  title: string;
+  body?: string;
+}
+
+export interface DecisionData {
+  options: DecisionOption[];
+  chosen_option_id?: string;
+  rationale?: string;
+}
+
+export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
+
+export interface ReviewData {
+  reviewer?: string;
+  rubric?: string;
+  verdict?: ReviewVerdict;
+}
+
+/**
+ * The free-form data_map: scalar values only (string | number |
+ * boolean | null). It's the escape hatch for fields the per-kind
+ * schema doesn't know about. Indexed in Firestore for filter/sort.
+ */
+export type WorkItemDataMapValue = string | number | boolean | null;
+export type WorkItemDataMap = Record<string, WorkItemDataMapValue>;
+
+/**
+ * A structured analysis result produced by the Enricher (Grill +
+ * Wayfind). The `sections` array lets a long analysis stay scannable
+ * — each section is a labeled block the detail view can render as
+ * a card.
+ */
+export interface AnalysisSection {
+  heading: string;
+  body: string;
+}
+
+export interface WorkItemAnalysis {
+  summary: string;
+  sections: AnalysisSection[];
+}
+
+/**
+ * A file attached to a work item. The actual bytes live in the
+ * `files/{file_id}` collection (1 MB max per file, 10 MB max per
+ * item) — the work item only stores the pointer + metadata so the
+ * kanban list query stays cheap.
+ */
+export interface WorkItemFile {
+  file_id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  added_at: string;
+  /** sha256 of the file content, for dedup. */
+  content_sha256?: string;
+}
+
+/** Stored at `files/{file_id}`. The `content_b64` is the only field
+ *  that makes the doc large; everything else is metadata for the
+ *  listing endpoint. */
+export interface FileRecord {
+  file_id: string;
+  name: string;
+  content_type: string;
+  size_bytes: number;
+  content_b64: string;
+  owner_item_id: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  content_sha256?: string;
+}
+
+// =====================================================================
 // Work item document
 // =====================================================================
 
@@ -112,6 +216,24 @@ export interface WorkItem {
   parent_id: string | null;
   group_id: string | null;
   archived_at: string | null;
+  // Slice 3 — rich data + board association
+  /**
+   * The board this item belongs to, or `null` for the Backlog.
+   * Slice 3: items are no longer filter-by-kind on the board; they
+   * are owned by a specific board (or the un-boarded backlog).
+   */
+  board_id: string | null;
+  /** Strict per-kind typed payload. Validated on every write. */
+  data: Record<string, unknown>;
+  /** Free-form scalar key/value map. Filter / sort key bag. */
+  data_map: WorkItemDataMap;
+  /** Pointer into `files/{file_id}` for the implementation plan. */
+  plan_file_id: string | null;
+  /** Structured analysis from Grill/Wayfind. */
+  analysis: WorkItemAnalysis | null;
+  /** Attachments (≤1 MB each, ≤10 MB per item). Pointers into
+   *  `files/{file_id}`; the doc body is the metadata. */
+  files: WorkItemFile[];
   created_at: string;
   updated_at: string;
   version: number; // optimistic concurrency
@@ -157,11 +279,22 @@ export interface WorkItemEvent {
 }
 
 // =====================================================================
-// Source manifest and registration
 // =====================================================================
+// Clients — slice 2
+// =====================================================================
+//
+// One `clients/{name}` document per authenticated identity that calls
+// the API. The `kind` discriminator picks the auth shape:
+//   - `kind: 'agent'`  — bearer is `<name>.<random_key>`, scrypt-hashed
+//   - `kind: 'user'`   — bearer is `wt_<random_32byte_id>`, the id IS
+//                        the credential (256 bits of entropy)
+//
+// The `api_tokens` collection is gone. Personal access tokens are
+// `clients` rows with `kind: 'user'`. The web UI's `ApiTokensSection`
+// becomes "Your personal clients" — a filtered view of this collection.
 
-export const SOURCE_KINDS = ['agent', 'human', 'system', 'webhook'] as const;
-export type SourceKind = (typeof SOURCE_KINDS)[number];
+export const CLIENT_KINDS = ['agent', 'user'] as const;
+export type ClientKind = (typeof CLIENT_KINDS)[number];
 
 export const CORE_CAPABILITIES = [
   'create',
@@ -186,10 +319,10 @@ export interface EnricherConfig {
   command: string;
 }
 
-export interface SourceManifest {
+export interface ClientManifest {
   name: string;
   display_name: string;
-  kind: SourceKind;
+  kind: ClientKind;
   capabilities: Capability[];
   webhook_url?: string | null;
   icon?: string | null;
@@ -200,22 +333,133 @@ export interface SourceManifest {
   };
 }
 
-export interface SourceRegistration {
+export interface Client {
   name: string;
   display_name: string;
-  kind: SourceKind;
-  manifest: SourceManifest;
+  kind: ClientKind;
+  /**
+   * Effective permission scope. The auth middleware reads this
+   * (`getEffectiveScope`) so `tools/list` is filtered per-token
+   * and `tools/call` fails closed for out-of-scope requests.
+   * Declared at registration; rotatable by an admin; never
+   * downscoped silently.
+   */
+  scope: ApiTokenScope;
+  /** Firebase uid of the owning user, or null for system agents. */
+  owner_uid: string | null;
+  /** Mirrored email for the owning user, used in admin UIs. */
+  owner_email?: string | null;
+  manifest: ClientManifest;
   capabilities: Capability[];
   webhook_secret: string | null;
   enabled: boolean;
-  last_sync_at: string | null;
+  created_at: string;
+  updated_at: string;
+  last_used_at: string | null;
+  rotated_at: string | null;
+  /**
+   * Soft-delete; a revoked client still resolves to a doc but
+   * `requireSource` rejects it. Only meaningful for `kind: 'user'`.
+   */
+  revoked_at: string | null;
+  /**
+   * Scrypt hash of the bearer, only for `kind: 'agent'`. The bearer
+   * plaintext is `<name>.<random_key>`; the hash is
+   * `scrypt$<salt-hex>$<derived-hex>`. Null for `kind: 'user'`.
+   */
+  api_key_hash?: string | null;
+  /**
+   * Random 32-byte id, only for `kind: 'user'`. The bearer is
+   * `wt_<bearer_id>`; knowing the bearer_id IS the credential.
+   */
+  bearer_id?: string | null;
+  /**
+   * Plaintext bearer, returned exactly once at creation or
+   * rotation time. Never persisted.
+   */
+  bearer?: string;
+  // Legacy / connector-shaped fields (kept for sources that
+  // predate the client/connector split; will move to `connectors/`
+  // in a follow-up).
+  last_sync_at?: string | null;
+  last_error?: string | null;
+}
+
+// =====================================================================
+// Connectors — slice 2
+// =====================================================================
+//
+// An integration the API talks to. A `Client` is an authenticated
+// identity that calls us; a `Connector` is a system we call (mirror,
+// webhook-in, webhook-out, bridge). Hermes is both — `clients/hermes`
+// is its bearer, `connectors/hermes` is its integration config.
+
+export const CONNECTOR_KINDS = [
+  'mirror',
+  'webhook-in',
+  'webhook-out',
+  'bridge',
+] as const;
+export type ConnectorKind = (typeof CONNECTOR_KINDS)[number];
+
+export type ConnectorStatus = 'ok' | 'error' | null;
+
+export interface Connector {
+  name: string;
+  kind: ConnectorKind;
+  /** Protocol sub-kind, e.g. 'hermes-cli-v1' | 'webhook-json-v1'. */
+  protocol: string;
+  /** Kind-specific configuration (e.g. hermesBin, webhookUrl). */
+  config: Record<string, unknown>;
+  enabled: boolean;
+  last_run_at: string | null;
+  last_status: ConnectorStatus;
   last_error: string | null;
   created_at: string;
   updated_at: string;
-  /** Stored alongside the document but not exposed in API responses. */
-  api_key_hash?: string;
-  /** API key, returned exactly once at creation time. */
-  api_key?: string;
+}
+
+export interface ListClientsResponse {
+  clients: Client[];
+}
+
+export interface CreateClientRequest {
+  manifest: ClientManifest;
+  /** Optional initial bearer; absent means one is generated. */
+  bearer?: string;
+  /** Scope defaults to `read_write`. Admin tokens can request `admin`. */
+  scope?: ApiTokenScope;
+  /** Firebase uid of the owning user, for `kind: 'user'`. */
+  owner_uid?: string;
+  owner_email?: string;
+}
+
+export interface CreateClientResponse {
+  client: Client;
+  /** Plaintext bearer, shown exactly once. */
+  bearer: string;
+}
+
+export interface RotateClientResponse {
+  client: Client;
+  /** New plaintext bearer; the old one is invalidated. */
+  bearer: string;
+}
+
+export interface IntrospectClientResponse {
+  name: string;
+  kind: ClientKind;
+  scope: ApiTokenScope;
+  owner_uid: string | null;
+  last_used_at: string | null;
+  capabilities: Capability[];
+  server_version: string;
+  /** The list of tool names this client can call. */
+  visible_tools: string[];
+}
+
+export interface ListConnectorsResponse {
+  connectors: Connector[];
 }
 
 // =====================================================================
@@ -291,6 +535,13 @@ export interface CreateCommandPayload {
   due_at?: string;
   parent_id?: string;
   group_id?: string;
+  /** Slice 3 — which board this item belongs to. Omit for Backlog. */
+  board_id?: string | null;
+  /** Slice 3 — per-kind typed payload. Validated against the kind's
+   *  Zod schema (`apps/api/src/data-schemas.ts`) on every write. */
+  data?: Record<string, unknown>;
+  /** Slice 3 — free-form scalar key/value map. */
+  data_map?: WorkItemDataMap;
 }
 
 export interface UpdateCommandPayload {
@@ -307,6 +558,10 @@ export interface UpdateCommandPayload {
       | 'group_id'
       | 'enricher'
       | 'source_meta'
+      | 'board_id'
+      | 'data'
+      | 'data_map'
+      | 'plan_file_id'
     >
   >;
   expected_version: number;
@@ -434,6 +689,12 @@ export interface ListItemsQuery {
   cursor?: string;
   limit?: number;
   include_archived?: boolean;
+  /**
+   * Slice 3 — filter by board. Pass an empty string `''` to mean
+   * "Backlog" (items with `board_id: null`). The server treats the
+   * special string `'null'` (or the empty string) as the Backlog.
+   */
+  board_id?: string | null;
 }
 
 export interface ListItemsResponse {
@@ -459,13 +720,13 @@ export interface EnrichRequest {
 }
 
 export interface CreateSourceRequest {
-  manifest: SourceManifest;
+  manifest: ClientManifest;
   /** Optional initial API key; if absent, one is generated. */
   api_key?: string;
 }
 
 export interface CreateSourceResponse {
-  source: SourceRegistration;
+  source: Client;
   /** Plaintext API key, shown exactly once. */
   api_key: string;
 }
@@ -671,3 +932,65 @@ export interface CreateApiTokenResponse {
   /** Plaintext bearer. Shown exactly once. */
   bearer: string;
 }
+
+// =====================================================================
+// MCP tool names (slice 4)
+// =====================================================================
+//
+// The 23 tools exposed on `/mcp` and `/mcp/stream`. Each tool's
+// name is `worktracker.<namespace>.<verb>`; `tools/list` filters the
+// catalog by the bearer's effective scope (read → 7, read_write →
+// 16, admin → 23). The "no tool will fail" promise (architecture
+// v1 §1) holds because the list filter guarantees the caller can
+// see only the tools they can run; `tools/call` re-checks the scope
+// as defense in depth.
+//
+// Adding a tool:
+//   1. Add the dotted name to `MCP_TOOL_NAMES` below.
+//   2. Add an entry in `apps/api/src/mcp-tools.ts` (registry).
+//   3. The typescript `McpToolName` union + the runtime
+//      `MCP_TOOL_NAMES` set are the single source of truth.
+
+export const MCP_NAMESPACES = [
+  'items',
+  'boards',
+  'files',
+  'clients',
+  'connectors',
+  'dispatch',
+  'enrich',
+] as const;
+export type McpNamespace = (typeof MCP_NAMESPACES)[number];
+
+export const MCP_TOOL_NAMES = [
+  // items (7)
+  'worktracker.items.list',
+  'worktracker.items.get',
+  'worktracker.items.create',
+  'worktracker.items.update',
+  'worktracker.items.comment',
+  'worktracker.items.link',
+  'worktracker.items.unlink',
+  // boards (5)
+  'worktracker.boards.list',
+  'worktracker.boards.get',
+  'worktracker.boards.create',
+  'worktracker.boards.update',
+  'worktracker.boards.delete',
+  // files (3)
+  'worktracker.files.list',
+  'worktracker.files.get',
+  'worktracker.files.upload',
+  // clients (4)
+  'worktracker.clients.list',
+  'worktracker.clients.mint',
+  'worktracker.clients.rotate',
+  'worktracker.clients.introspect',
+  // connectors (2)
+  'worktracker.connectors.list',
+  'worktracker.connectors.get',
+  // dispatch + enrich (2)
+  'worktracker.dispatch.run',
+  'worktracker.enrich.run',
+] as const;
+export type McpToolName = (typeof MCP_TOOL_NAMES)[number];

@@ -1,6 +1,6 @@
 /**
  * Local seed: populates the Firestore emulator with a small set
- * of sources, work items, and events. Run with:
+ * of clients, work items, and events. Run with:
  *
  *   FIRESTORE_EMULATOR_HOST=localhost:8080 \
  *   GCLOUD_PROJECT=worktracker-local \
@@ -9,6 +9,12 @@
  * Uses the Firestore REST API (the v1 endpoint) directly so we
  * don't need any credentials — the emulator accepts any project
  * ID and skips auth.
+ *
+ * Slice 2: every client is written with an explicit `scope` so
+ * `getEffectiveScope` resolves deterministically. The old
+ * `adminSources` allowlist is gone — the only admin path is
+ * WORKTRACKER_ADMIN_TOKEN, plus any client doc with
+ * `scope: 'admin'`.
  */
 
 import bcrypt from 'bcryptjs';
@@ -64,38 +70,55 @@ function toFirestoreValue(v: unknown): FirestoreValue {
 const now = () => new Date().toISOString();
 const id = () => Date.now().toString(36) + randomBytes(4).toString('hex');
 
-async function seedSource(name: string, displayName: string, kind: 'agent' | 'human' | 'system' | 'webhook', capabilities: string[]): Promise<string> {
+type ClientKind = 'agent' | 'user';
+type ApiTokenScope = 'read' | 'read_write' | 'admin';
+
+/**
+ * Seed a single agent client. Slice 2: the `scope` field is
+ * written explicitly; `getEffectiveScope` reads it and gates
+ * MCP tool visibility. Default scope is `read_write`; pass
+ * `admin` for clients that need board admin tools.
+ */
+async function seedClient(input: {
+  name: string;
+  displayName: string;
+  capabilities: string[];
+  scope: ApiTokenScope;
+}): Promise<string> {
   const apiKey = randomBytes(24).toString('base64url');
   const hash = await bcrypt.hash(apiKey, 8);
   const manifest = {
-    name,
-    display_name: displayName,
-    kind,
-    capabilities,
+    name: input.name,
+    display_name: input.displayName,
+    kind: 'agent' as ClientKind,
+    capabilities: input.capabilities,
     webhook_url: null,
     icon: null,
     version: '1.0.0',
   };
   const ts = now();
-  await fy(`/sources/${name}`, {
+  await fy(`/sources/${input.name}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(fyDoc({
-      name,
-      display_name: displayName,
-      kind,
+      name: input.name,
+      display_name: input.displayName,
+      kind: 'agent' as ClientKind,
+      scope: input.scope,
+      owner_uid: null,
       manifest,
-      capabilities,
+      capabilities: input.capabilities,
       api_key_hash: hash,
       webhook_secret: null,
       enabled: true,
-      last_sync_at: ts,
-      last_error: null,
       created_at: ts,
       updated_at: ts,
+      last_used_at: null,
+      rotated_at: null,
+      revoked_at: null,
     })),
   });
-  console.log(`  ✓ source "${name}" created (api_key: ${apiKey})`);
+  console.log(`  ✓ client "${input.name}" created (scope: ${input.scope}, api_key: ${apiKey})`);
   return apiKey;
 }
 
@@ -109,6 +132,10 @@ async function seedItem(partial: {
   source: string;
   owner?: string | null;
   due_at?: string | null;
+  // Slice 3 — board + rich data.
+  board_id?: string | null;
+  data?: Record<string, unknown>;
+  data_map?: Record<string, string | number | boolean | null>;
 }): Promise<string> {
   const itemId = `item-${Math.random().toString(36).slice(2, 10)}`;
   const ts = now();
@@ -133,6 +160,15 @@ async function seedItem(partial: {
       parent_id: null,
       group_id: null,
       archived_at: null,
+      // Slice 3 — board + rich data. The default is Backlog
+      // (board_id: null); seeded items below pin a real board
+      // once `seedBoards` runs.
+      board_id: partial.board_id ?? null,
+      data: partial.data ?? {},
+      data_map: partial.data_map ?? {},
+      plan_file_id: null,
+      analysis: null,
+      files: [],
       created_at: ts,
       updated_at: ts,
       version: 1,
@@ -165,28 +201,82 @@ async function seedItem(partial: {
 async function main(): Promise<void> {
   console.log('Seeding WorkTracker local Firestore…');
 
-  // 1. Sources.
-  const hermesKey = await seedSource('hermes', 'Hermes', 'agent', [
-    'create',
-    'update',
-    'transition',
-    'comment',
-    'link',
-  ]);
-  await seedSource('mavis', 'Mavis / Claude Code', 'agent', [
-    'create',
-    'update',
-    'transition',
-    'comment',
-    'link',
-    'enrich:grill',
-    'enrich:wayfind',
-  ]);
-  await seedSource('codex', 'Codex CLI', 'agent', ['create', 'update', 'transition', 'comment']);
-  await seedSource('cline', 'Cline', 'agent', ['create', 'update', 'transition', 'comment']);
-  await seedSource('web', 'WorkTracker Web UI', 'system', ['create', 'update', 'transition', 'comment', 'link']);
+  // 1. Clients (slice 2). Scope is explicit. Admin scope is reserved
+  // for the operator; agent clients get read_write by default; a
+  // single test client gets `read` to exercise the read-only path.
+  const hermesKey = await seedClient({
+    name: 'hermes',
+    displayName: 'Hermes',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'mavis',
+    displayName: 'Mavis / Claude Code',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link', 'enrich:grill', 'enrich:wayfind'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'codex',
+    displayName: 'Codex CLI',
+    capabilities: ['create', 'update', 'transition', 'comment'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'cline',
+    displayName: 'Cline',
+    capabilities: ['create', 'update', 'transition', 'comment'],
+    scope: 'read_write',
+  });
+  await seedClient({
+    name: 'web',
+    displayName: 'WorkTracker Web UI',
+    capabilities: ['create', 'update', 'transition', 'comment', 'link'],
+    // The web UI is a logged-in Firebase user, but the legacy
+    // `web` source still shows up in dashboards and event actors.
+    // The web UI itself authenticates with a Firebase ID token,
+    // not this bearer; the scope just keeps the legacy record
+    // consistent.
+    scope: 'admin',
+  });
+  await seedClient({
+    name: 'read-only-test',
+    displayName: 'Read-only test client',
+    capabilities: [],
+    scope: 'read',
+  });
 
-  // 2. Work items.
+  // 2. Boards. Slice 3 — items are owned by a board (or the
+  // Backlog, when board_id is null). Seed one default board so
+  // the seeded items can land somewhere; the operator can create
+  // more from /admin/boards.
+  const defaultBoardId = `board-${Math.random().toString(36).slice(2, 10)}`;
+  await fy(`/boards/${defaultBoardId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(fyDoc({
+      id: defaultBoardId,
+      name: 'Today',
+      description: 'Default work board. Tasks and tickets together.',
+      columns: [
+        { id: 'doing',   label: 'Doing',   statuses: ['in_progress', 'triaged'] },
+        { id: 'ready',   label: 'Ready',   statuses: ['ready', 'proposed', 'pending'] },
+        { id: 'review',  label: 'Review',  statuses: ['changes_requested', 'approved', 'merged'] },
+        { id: 'done',    label: 'Done',    statuses: ['done', 'resolved', 'accepted', 'closed'] },
+        { id: 'block',   label: 'Blocked', statuses: ['blocked'] },
+        { id: 'back',    label: 'Backlog', statuses: ['open'] },
+      ],
+      kinds: null,
+      is_default: true,
+      created_at: now(),
+      updated_at: now(),
+    })),
+  });
+  console.log(`  ✓ board "${defaultBoardId}" created (Today, default)`);
+
+  // 3. Work items. Slice 3 — most pin to the default board;
+  // a couple stay in the Backlog (board_id: null) to exercise
+  // the backlog view.
   const today = new Date();
   const inDays = (n: number) =>
     new Date(today.getTime() + n * 24 * 60 * 60 * 1000).toISOString();
@@ -200,6 +290,9 @@ async function main(): Promise<void> {
     source: 'hermes',
     owner: 'worktracker',
     due_at: inDays(2),
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 240, tags: ['hermes', 'mirror', 'v0'] },
+    data_map: { sprint: 'v0.5', team: 'integrations' },
   });
   await seedItem({
     kind: 'task',
@@ -209,6 +302,9 @@ async function main(): Promise<void> {
     priority: 'high',
     source: 'web',
     due_at: inDays(1),
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 480, tags: ['web', 'kanban'] },
+    data_map: { sprint: 'v0.5', team: 'web' },
   });
   await seedItem({
     kind: 'task',
@@ -218,6 +314,9 @@ async function main(): Promise<void> {
     priority: 'medium',
     source: 'mavis',
     due_at: inDays(5),
+    // No board_id — lives in the Backlog.
+    data: { estimate_minutes: 60, tags: ['docs', 'brain'] },
+    data_map: { sprint: 'v0.5' },
   });
   await seedItem({
     kind: 'task',
@@ -226,6 +325,8 @@ async function main(): Promise<void> {
     priority: 'low',
     source: 'web',
     due_at: inDays(14),
+    // No board_id — lives in the Backlog.
+    data: { tags: ['mac-daemon', 'reminders'] },
   });
   await seedItem({
     kind: 'task',
@@ -233,12 +334,16 @@ async function main(): Promise<void> {
     status: 'blocked',
     priority: 'medium',
     source: 'mavis',
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 120, tags: ['connectors', 'enrichment'] },
   });
   await seedItem({
     kind: 'task',
     title: 'Document REST + MCP API surface',
     status: 'done',
     source: 'codex',
+    board_id: defaultBoardId,
+    data: { estimate_minutes: 90, tags: ['docs', 'mcp'] },
   });
   await seedItem({
     kind: 'ticket',
@@ -247,6 +352,9 @@ async function main(): Promise<void> {
     status: 'triaged',
     severity: 'medium',
     source: 'cline',
+    board_id: defaultBoardId,
+    // ticket.data requires `severity` (the per-kind strict schema).
+    data: { severity: 'medium', customer: 'internal', reproduction: 'POST /api/items with stale expected_version' },
   });
   await seedItem({
     kind: 'decision',
@@ -254,15 +362,28 @@ async function main(): Promise<void> {
     body: 'Discussion: separate project from AXUIKit, no Cliq usage, want tight DX. Picked Firebase.',
     status: 'accepted',
     source: 'mavis',
+    board_id: defaultBoardId,
+    // decision.data requires at least one option.
+    data: {
+      options: [
+        { id: 'firebase',  title: 'Firebase / Cloud Run' },
+        { id: 'catalyst',  title: 'Zoho Catalyst' },
+      ],
+      chosen_option_id: 'firebase',
+      rationale: 'Tighter DX, separate from AXUIKit, no Cliq usage.',
+    },
   });
   await seedItem({
     kind: 'review',
     title: 'Review FCM push-notification path for v0.5',
     status: 'pending',
     source: 'codex',
+    board_id: defaultBoardId,
+    // review.data has all fields optional.
+    data: { reviewer: 'nyx', verdict: 'comment' },
   });
 
-  // 3. Save the hermes api key for downstream smoke tests.
+  // 4. Save the hermes api key for downstream smoke tests.
   const { writeFileSync } = await import('node:fs');
   writeFileSync(
     new URL('../.local-secrets.json', import.meta.url),

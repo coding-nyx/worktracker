@@ -18,6 +18,7 @@ import type {
   WorkItemStatus,
   WorkItemKind,
 } from '@worktracker/types';
+import { canTransition } from '@worktracker/types';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useItemsSubscription } from '../lib/useItemsSubscription';
@@ -55,6 +56,13 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showNewItem, setShowNewItem] = useState(false);
   const [itemDetailsId, setItemDetailsId] = useState<string | null>(null);
+  // Slice 3 — the kanban is either a board view (items with
+  // board_id === activeBoard.id) or the Backlog view (items with
+  // board_id === null). The toggle sits in the page header; the
+  // choice persists per-board so switching boards doesn't lose
+  // the user's preferred layout.
+  type ViewMode = 'board' | 'backlog';
+  const [viewMode, setViewMode] = useState<ViewMode>('board');
 
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   useEffect(() => {
@@ -77,10 +85,10 @@ export default function HomePage() {
   const itemsToShow: WorkItem[] = items.length > 0 ? items : (restData?.items ?? []);
 
   const { data: sourcesData } = useQuery({
-    queryKey: ['sources'],
-    queryFn: () => api.listSources(),
+    queryKey: ['clients'],
+    queryFn: () => api.listClients(),
   });
-  const sources = sourcesData?.sources ?? [];
+  const sources = (sourcesData?.clients ?? []).map((c) => ({ name: c.name, display_name: c.display_name }));
 
   const { data: boardsData } = useQuery({
     queryKey: ['boards'],
@@ -116,12 +124,26 @@ export default function HomePage() {
 
   const boardKinds: WorkItemKind[] | null = activeBoard?.kinds ?? null;
   const visibleItems = useMemo(() => {
+    // Slice 3 — board / backlog split. `board_id: null` is the
+    // Backlog; the active board owns the rest. The kind filter
+    // still applies on top, so a board that's locked to `task`
+    // shows only tasks, even if it owns tickets.
+    let scoped: WorkItem[];
+    if (viewMode === 'backlog') {
+      scoped = itemsToShow.filter((i) => i.board_id === null);
+    } else if (activeBoard) {
+      scoped = itemsToShow.filter((i) => i.board_id === activeBoard.id);
+    } else {
+      // No active board + not backlog: fall back to "everything
+      // that's not on any board" so the page doesn't go blank.
+      scoped = itemsToShow.filter((i) => i.board_id === null);
+    }
     let base: WorkItem[];
     if (!boardKinds || boardKinds.length === 0) {
-      base = itemsToShow.filter((i) => !i.archived_at);
+      base = scoped.filter((i) => !i.archived_at);
     } else {
       const set = new Set<WorkItemKind>(boardKinds);
-      base = itemsToShow.filter((i) => set.has(i.kind) && !i.archived_at);
+      base = scoped.filter((i) => set.has(i.kind) && !i.archived_at);
     }
     const q = searchQuery.trim().toLowerCase();
     if (!q) return base;
@@ -131,7 +153,7 @@ export default function HomePage() {
         (i.body ?? '').toLowerCase().includes(q) ||
         (i.owner ?? '').toLowerCase().includes(q),
     );
-  }, [itemsToShow, boardKinds, searchQuery]);
+  }, [itemsToShow, boardKinds, searchQuery, activeBoard, viewMode]);
 
   const boardColumns: { id: string; label: string; statuses: string[] }[] = useMemo(() => {
     if (!activeBoard) return FALLBACK_COLUMNS;
@@ -153,8 +175,21 @@ export default function HomePage() {
       api.transition(id, { to_status, expected_version }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['items'] });
+      setBrainError(null);
+    },
+    onError: (err) => {
+      // Surface the brain's reason inline (the "drag-drop fix").
+      // The structured `code: 'invalid_transition'` from the
+      // server ends up in `err.message` via the API error wrapper.
+      const msg = err instanceof Error ? err.message : String(err);
+      setBrainError(msg);
     },
   });
+
+  // The last brain error we want to surface in the mono `[err]`
+  // block. Cleared on a successful transition or when the user
+  // dismisses it.
+  const [brainError, setBrainError] = useState<string | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -167,7 +202,17 @@ export default function HomePage() {
     if (!col || col.statuses.length === 0) return;
     const targetStatus = col.statuses[0] as WorkItemStatus;
     if (targetStatus === item.status) return;
-    if (!isValidTransition(item.status, targetStatus, item.kind)) return;
+    // Slice 3 — gate on the state machine. The same `canTransition`
+    // the brain uses, evaluated client-side so the drop is a quiet
+    // no-op (the column was already greyed out). If a stale item
+    // somehow lands here (e.g. the server's view differs), the
+    // server still rejects with `code: 'invalid_transition'` and
+    // the `[err]` block surfaces the reason.
+    const check = canTransition(item.status, targetStatus, item.kind);
+    if (!check.ok) {
+      setBrainError(check.reason.message);
+      return;
+    }
     transition.mutate({ id: item.id, to_status: targetStatus, expected_version: item.version });
   }
 
@@ -180,6 +225,8 @@ export default function HomePage() {
         boards={boards}
         activeBoardId={activeBoard?.id ?? null}
         onBoardChange={onBoardChange}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         sourceFilter={sourceFilter}
         onSourceFilterChange={setSourceFilter}
         sources={sources}
@@ -188,6 +235,8 @@ export default function HomePage() {
         onNewItem={() => setShowNewItem(true)}
         liveOk={!liveError}
         liveError={liveErrorObj}
+        brainError={brainError}
+        onDismissBrainError={() => setBrainError(null)}
       />
 
       {boards.length === 0 ? (
@@ -277,6 +326,8 @@ function PageHeader({
   boards,
   activeBoardId,
   onBoardChange,
+  viewMode,
+  onViewModeChange,
   sourceFilter,
   onSourceFilterChange,
   sources,
@@ -285,6 +336,8 @@ function PageHeader({
   onNewItem,
   liveOk,
   liveError,
+  brainError,
+  onDismissBrainError,
 }: {
   items: WorkItem[];
   totalItems: number;
@@ -292,6 +345,8 @@ function PageHeader({
   boards: Board[];
   activeBoardId: string | null;
   onBoardChange: (id: string) => void;
+  viewMode: 'board' | 'backlog';
+  onViewModeChange: (m: 'board' | 'backlog') => void;
   sourceFilter: string;
   onSourceFilterChange: (s: string) => void;
   sources: { name: string; display_name: string }[];
@@ -300,6 +355,8 @@ function PageHeader({
   onNewItem: () => void;
   liveOk: boolean;
   liveError: Error | null;
+  brainError: string | null;
+  onDismissBrainError: () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -317,7 +374,7 @@ function PageHeader({
             <span>items</span>
             <span aria-hidden className="text-ink-3">·</span>
             <span className="inline-flex items-center gap-1.5">
-              <BoardBadge board={board} />
+              <BoardBadge board={board} viewMode={viewMode} />
             </span>
             <span aria-hidden className="text-ink-3">·</span>
             <span className="inline-flex items-center gap-1.5">
@@ -327,8 +384,14 @@ function PageHeader({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <ViewModeToggle viewMode={viewMode} onChange={onViewModeChange} />
           <SearchInput value={searchQuery} onChange={onSearchQueryChange} />
-          <BoardPicker boards={boards} activeBoardId={activeBoardId} onChange={onBoardChange} />
+          <BoardPicker
+            boards={boards}
+            activeBoardId={activeBoardId}
+            onChange={onBoardChange}
+            disabled={viewMode === 'backlog'}
+          />
           <SourceFilter value={sourceFilter} onChange={onSourceFilterChange} sources={sources} />
           <button
             type="button"
@@ -353,11 +416,71 @@ function PageHeader({
           </span>
         </div>
       ) : null}
+
+      {brainError ? (
+        <div
+          role="alert"
+          className="card-inset flex items-start gap-3 border-status-blocked-500/40 bg-status-blocked-500/5 px-3.5 py-2.5"
+        >
+          <span aria-hidden className="mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-status-blocked-500" />
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="font-mono text-[11px] uppercase tracking-wider text-status-blocked-500">
+              [err] · brain rejected the transition
+            </p>
+            <p className="break-words font-mono text-[12.5px] text-status-blocked-600">
+              {brainError}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onDismissBrainError}
+            className="btn-ghost focus-ring shrink-0 text-[12px] text-ink-3"
+            title="Dismiss"
+          >
+            dismiss
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function BoardBadge({ board }: { board: Board | null }) {
+function ViewModeToggle({
+  viewMode, onChange,
+}: { viewMode: 'board' | 'backlog'; onChange: (m: 'board' | 'backlog') => void }) {
+  return (
+    <div
+      role="tablist"
+      aria-label="View mode"
+      className="inline-flex items-center rounded-md border border-border-subtle bg-bg-sunken/40 p-0.5"
+    >
+      {(['board', 'backlog'] as const).map((m) => {
+        const active = viewMode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(m)}
+            className={`focus-ring rounded-sm px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-wider transition-colors ${
+              active
+                ? 'bg-bg-raised text-brand-500 shadow-glow-cyan'
+                : 'text-ink-3 hover:text-ink-1'
+            }`}
+          >
+            {m}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BoardBadge({ board, viewMode }: { board: Board | null; viewMode: 'board' | 'backlog' }) {
+  if (viewMode === 'backlog') {
+    return <span className="font-medium text-magenta-500">Backlog</span>;
+  }
   if (!board) return <span className="italic text-ink-3">no board</span>;
   return (
     <>
@@ -395,10 +518,15 @@ function BoardPicker({
   boards,
   activeBoardId,
   onChange,
+  disabled,
 }: {
   boards: Board[];
   activeBoardId: string | null;
   onChange: (id: string) => void;
+  /** When true (Backlog view), the picker is rendered but not
+   *  interactive — the active board is irrelevant to the visible
+   *  items, so switching it is a no-op. */
+  disabled?: boolean;
 }) {
   if (boards.length === 0) {
     return (
@@ -417,7 +545,9 @@ function BoardPicker({
         id="board-picker"
         value={activeBoardId ?? ''}
         onChange={(e) => onChange(e.target.value)}
-        className="field pr-8 text-[13px]"
+        disabled={disabled}
+        className="field pr-8 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
+        title={disabled ? 'Switch to Board view to change board' : undefined}
       >
         {boards.map((b) => (
           <option key={b.id} value={b.id}>
@@ -704,31 +834,9 @@ function formatDate(s: string): string {
   }
 }
 
-function isValidTransition(from: WorkItemStatus, to: WorkItemStatus, _kind: WorkItem['kind']): boolean {
-  if (from === to) return false;
-  const allowed: Record<WorkItemStatus, WorkItemStatus[]> = {
-    open: ['ready', 'in_progress', 'blocked', 'done', 'cancelled'],
-    ready: ['open', 'in_progress', 'blocked', 'done', 'cancelled'],
-    in_progress: ['ready', 'blocked', 'done', 'cancelled'],
-    blocked: ['ready', 'in_progress', 'done', 'cancelled'],
-    done: ['ready', 'in_progress'],
-    cancelled: ['open'],
-    triaged: ['in_progress', 'wontfix', 'duplicate', 'resolved'],
-    in_progress_legacy: [],
-    resolved: ['in_progress', 'wontfix', 'duplicate'],
-    wontfix: ['triaged'],
-    duplicate: ['triaged'],
-    proposed: ['accepted', 'rejected', 'superseded'],
-    accepted: ['superseded'],
-    superseded: [],
-    rejected: ['proposed'],
-    pending: ['changes_requested', 'approved', 'closed'],
-    changes_requested: ['pending', 'approved', 'closed'],
-    approved: ['merged', 'closed', 'pending'],
-    merged: ['closed'],
-    closed: ['pending'],
-  } as Record<WorkItemStatus, WorkItemStatus[]>;
-  void (allowed as Record<string, WorkItemStatus[]>).in_progress_legacy;
-  const target = allowed[to];
-  return Array.isArray(target) ? (target as WorkItemStatus[]).includes(from) : false;
+function isValidTransition(from: WorkItemStatus, to: WorkItemStatus, kind: WorkItem['kind']): boolean {
+  // Slice 3 — defer to the shared state machine in
+  // @worktracker/types. The local stub this replaced was buggy
+  // (reversed the edge lookup) and didn't validate per-kind.
+  return canTransition(from, to, kind).ok;
 }

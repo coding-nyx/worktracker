@@ -5,6 +5,10 @@ const config: Config = {
   darkMode: ['class', '[data-theme="dark"]'],
   theme: {
     extend: {
+      letterSpacing: {
+        'mono-wide':   '0.04em',
+        'mono-widest': '0.12em',
+      },
       fontFamily: {
         // Avenir Next per user preference. Falls back to system
         // sans on platforms without the font.
@@ -52,18 +56,19 @@ const config: Config = {
         // Per-status hues, used by both the kanban column headers
         // and the card pills. Light tints (50) for backgrounds,
         // mid (500) for borders / dots, full (600) for text on
-        // dark surfaces.
+        // dark surfaces. The `DEFAULT` slot is the 500 value so
+        // `bg-status-progress` resolves inside @apply directives.
         status: {
-          backlog:  { 50: 'rgb(var(--status-backlog-50) / <alpha-value>)',  500: 'rgb(var(--status-backlog-500) / <alpha-value>)',  600: 'rgb(var(--status-backlog-600) / <alpha-value>)' },
-          ready:    { 50: 'rgb(var(--status-ready-50) / <alpha-value>)',    500: 'rgb(var(--status-ready-500) / <alpha-value>)',    600: 'rgb(var(--status-ready-600) / <alpha-value>)' },
-          progress: { 50: 'rgb(var(--status-progress-50) / <alpha-value>)', 500: 'rgb(var(--status-progress-500) / <alpha-value>)', 600: 'rgb(var(--status-progress-600) / <alpha-value>)' },
-          blocked:  { 50: 'rgb(var(--status-blocked-50) / <alpha-value>)',  500: 'rgb(var(--status-blocked-500) / <alpha-value>)',  600: 'rgb(var(--status-blocked-600) / <alpha-value>)' },
-          review:   { 50: 'rgb(var(--status-review-50) / <alpha-value>)',   500: 'rgb(var(--status-review-500) / <alpha-value>)',   600: 'rgb(var(--status-review-600) / <alpha-value>)' },
-          done:     { 50: 'rgb(var(--status-done-50) / <alpha-value>)',     500: 'rgb(var(--status-done-500) / <alpha-value>)',     600: 'rgb(var(--status-done-600) / <alpha-value>)' },
+          backlog:  { DEFAULT: 'rgb(var(--status-backlog-500) / <alpha-value>)',  50: 'rgb(var(--status-backlog-50) / <alpha-value>)',  500: 'rgb(var(--status-backlog-500) / <alpha-value>)',  600: 'rgb(var(--status-backlog-600) / <alpha-value>)' },
+          ready:    { DEFAULT: 'rgb(var(--status-ready-500) / <alpha-value>)',    50: 'rgb(var(--status-ready-50) / <alpha-value>)',    500: 'rgb(var(--status-ready-500) / <alpha-value>)',    600: 'rgb(var(--status-ready-600) / <alpha-value>)' },
+          progress: { DEFAULT: 'rgb(var(--status-progress-500) / <alpha-value>)', 50: 'rgb(var(--status-progress-50) / <alpha-value>)', 500: 'rgb(var(--status-progress-500) / <alpha-value>)', 600: 'rgb(var(--status-progress-600) / <alpha-value>)' },
+          blocked:  { DEFAULT: 'rgb(var(--status-blocked-500) / <alpha-value>)',  50: 'rgb(var(--status-blocked-50) / <alpha-value>)',  500: 'rgb(var(--status-blocked-500) / <alpha-value>)',  600: 'rgb(var(--status-blocked-600) / <alpha-value>)' },
+          review:   { DEFAULT: 'rgb(var(--status-review-500) / <alpha-value>)',   50: 'rgb(var(--status-review-50) / <alpha-value>)',   500: 'rgb(var(--status-review-500) / <alpha-value>)',   600: 'rgb(var(--status-review-600) / <alpha-value>)' },
+          done:     { DEFAULT: 'rgb(var(--status-done-500) / <alpha-value>)',     50: 'rgb(var(--status-done-50) / <alpha-value>)',     500: 'rgb(var(--status-done-500) / <alpha-value>)',     600: 'rgb(var(--status-done-600) / <alpha-value>)' },
         },
-        success:  { 500: '#22c55e' },
-        warning:  { 500: '#f59e0b' },
-        danger:   { 500: '#ef4444' },
+        success:  { DEFAULT: '#22c55e', 500: '#22c55e' },
+        warning:  { DEFAULT: '#f59e0b', 500: '#f59e0b' },
+        danger:   { DEFAULT: '#ef4444', 500: '#ef4444' },
       },
       borderRadius: {
         '4xl': '1.5rem',

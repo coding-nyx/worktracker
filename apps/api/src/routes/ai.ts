@@ -28,7 +28,7 @@ import { requireSource } from '../auth.js';
 import { AI_TOOLS } from '../ai/tools.js';
 import { chatCompletion, isAiConfigured, type ChatMessage, type ToolCall } from '../ai/client.js';
 import { buildSystemPrompt } from '../ai/prompts.js';
-import { dispatchTool } from '../mcp.js';
+import { dispatchTool } from '../mcp-tools.js';
 
 const MAX_TOOL_TURNS = 8; // safety: cap the agent loop
 

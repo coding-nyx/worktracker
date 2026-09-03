@@ -8,9 +8,11 @@ import { useAuth } from '../lib/auth';
 import { useChatUi } from '../app/providers';
 
 const NAV = [
-  { href: '/',          label: 'Kanban' },
-  { href: '/sources',   label: 'Sources' },
-  { href: '/admin',     label: 'Connectors' },
+  { href: '/',           label: 'Kanban' },
+  { href: '/clients',    label: 'Clients' },
+  { href: '/connectors', label: 'Connectors' },
+  { href: '/admin',      label: 'Admin' },
+  { href: '/docs',       label: 'Docs' },
 ] as const;
 
 const ADMIN_NAV: { href: string; label: string }[] = [

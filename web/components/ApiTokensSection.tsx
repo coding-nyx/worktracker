@@ -2,60 +2,84 @@
 
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ApiToken, ApiTokenScope } from '@worktracker/types';
+import type { ApiTokenScope, Client } from '@worktracker/types';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Pill } from './Pill';
 import { Modal } from './Modal';
 
 /**
- * Personal API tokens. The signed-in user mints a bearer for
- * an external MCP client (Claude Code, Codex, Hermes), picks
- * the permission scope, and the bearer is shown once with a
- * copy-to-clipboard. Existing tokens can be revoked from the
- * same panel.
+ * "Your personal clients" — slice 2 view of the Settings page.
+ *
+ * Replaces the old "Personal API tokens" panel. Personal access
+ * tokens are now `kind: 'user'` rows in the `sources` collection,
+ * minted via `POST /api/clients/mint`. The list is filtered
+ * client-side to the signed-in user's `owner_uid`.
  *
  * Scope legend:
  *   - read        list/get items and boards
- *   - read+write  read + create/update/transition/comment/link
+ *   - read_write  read + create/update/transition/comment/link
  *   - admin       read+write + board admin tools (admins only)
  *
  * The bearer plaintext is never stored. The list endpoint
- * returns the record (id, name, scope, created_at,
- * last_used_at, revoked_at) without the secret. Only the
- * POST endpoint returns the bearer; we surface it once and
- * never again.
+ * returns the record (name, scope, last_used_at, revoked_at)
+ * without the secret. Only the mint endpoint returns the bearer;
+ * we surface it once and never again.
  */
-export function ApiTokensSection() {
+export function PersonalClientsSection() {
   const auth = useAuth();
   const qc = useQueryClient();
-  const [showCreate, setShowCreate] = useState(false);
+  const [showMint, setShowMint] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<{ name: string; bearer: string; scope: ApiTokenScope } | null>(null);
   const [copied, setCopied] = useState(false);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['auth', 'tokens'],
-    queryFn: () => api.listApiTokens(),
+    queryKey: ['clients', 'mine'],
+    queryFn: () => api.listClients(),
     enabled: !!auth.firebaseUser,
   });
-  const tokens = data?.tokens ?? [];
+  const all = data?.clients ?? [];
+  // Filter to the signed-in user's personal clients. The server
+  // doesn't have a /api/clients?owner_uid=me shortcut yet, so the
+  // client filters. With v0 scale this is fine.
+  const mine = auth.firebaseUser
+    ? all.filter((c) => c.kind === 'user' && c.owner_uid === auth.firebaseUser?.uid)
+    : [];
 
-  const create = useMutation({
-    mutationFn: (body: { name: string; scope: ApiTokenScope }) => api.createApiToken(body),
-    onSuccess: ({ token, bearer }) => {
-      qc.invalidateQueries({ queryKey: ['auth', 'tokens'] });
-      setShowCreate(false);
-      setRevealed({ name: token.name, bearer, scope: token.scope });
+  const mint = useMutation({
+    mutationFn: (body: { name: string; scope: ApiTokenScope }) => {
+      if (!auth.firebaseUser) throw new Error('not signed in');
+      return api.mintClient({
+        name: body.name,
+        scope: body.scope,
+        owner_uid: auth.firebaseUser.uid,
+        owner_email: auth.firebaseUser.email ?? '',
+      });
+    },
+    onSuccess: ({ client, bearer }) => {
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      setShowMint(false);
+      setRevealed({ name: client.display_name, bearer, scope: client.scope });
       setCopied(false);
     },
     onError: (err) => setPageError((err as Error).message),
   });
 
   const revoke = useMutation({
-    mutationFn: (id: string) => api.revokeApiToken(id),
+    mutationFn: (name: string) => api.revokeClient(name),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['auth', 'tokens'] });
+      qc.invalidateQueries({ queryKey: ['clients'] });
+    },
+    onError: (err) => setPageError((err as Error).message),
+  });
+
+  const rotate = useMutation({
+    mutationFn: (name: string) => api.rotateClient(name),
+    onSuccess: ({ client, bearer }) => {
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      setRevealed({ name: client.display_name, bearer, scope: client.scope });
+      setCopied(false);
     },
     onError: (err) => setPageError((err as Error).message),
   });
@@ -78,22 +102,24 @@ export function ApiTokensSection() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-1">
           <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-3">
-            Personal API tokens
+            Your personal clients
           </h2>
           <p className="text-[12.5px] text-ink-2">
-            Mint a bearer for an external MCP client (Claude Code, Codex, Hermes). Treat each token like a
-            password — it can read or mutate your kanban, depending on its scope.
+            Mint a bearer for an external MCP client (Claude Code, Codex, Hermes). Each one is a
+            <code className="mx-1 rounded bg-bg-sunken px-1 py-0.5 font-mono text-[11px] text-ink-1">kind: user</code>
+            row in the clients collection — see <a href="/clients" className="text-brand-500 underline">/clients</a> for the full
+            admin view. Treat each bearer like a password — it can read or mutate your kanban, depending on its scope.
           </p>
         </div>
         <button
           type="button"
-          onClick={() => { setPageError(null); setShowCreate(true); }}
+          onClick={() => { setPageError(null); setShowMint(true); }}
           className="btn-primary focus-ring inline-flex items-center gap-1.5 px-3 py-1.5 text-[12.5px] font-medium"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M12 5v14" /><path d="M5 12h14" />
           </svg>
-          Create token
+          Mint client
         </button>
       </div>
 
@@ -105,14 +131,14 @@ export function ApiTokensSection() {
       ) : null}
 
       {isLoading ? (
-        <div className="text-[13px] text-ink-3">Loading tokens…</div>
+        <div className="text-[13px] text-ink-3">Loading clients…</div>
       ) : error ? (
         <div className="rounded-lg border border-status-blocked-500/40 bg-status-blocked-500/10 px-3 py-2 text-[12.5px] text-status-blocked-600">
           {(error as Error).message}
         </div>
-      ) : tokens.length === 0 ? (
+      ) : mine.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border-subtle bg-bg-sunken/40 px-6 py-8 text-center text-[13px] text-ink-3">
-          No tokens yet. Create one to connect an external MCP client.
+          No personal clients yet. Mint one to connect an external MCP client.
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border-subtle">
@@ -128,12 +154,14 @@ export function ApiTokensSection() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border-subtle">
-              {tokens.map((t) => (
-                <TokenRow
-                  key={t.id}
-                  token={t}
-                  busy={revoke.isPending && revoke.variables === t.id}
-                  onRevoke={() => revoke.mutate(t.id)}
+              {mine.map((c) => (
+                <ClientRow
+                  key={c.name}
+                  client={c}
+                  busyRevoke={revoke.isPending && revoke.variables === c.name}
+                  busyRotate={rotate.isPending && rotate.variables === c.name}
+                  onRevoke={() => revoke.mutate(c.name)}
+                  onRotate={() => rotate.mutate(c.name)}
                 />
               ))}
             </tbody>
@@ -141,13 +169,13 @@ export function ApiTokensSection() {
         </div>
       )}
 
-      <CreateModal
-        open={showCreate}
+      <MintModal
+        open={showMint}
         isAdmin={auth.isAdmin}
-        onClose={() => { if (!create.isPending) setShowCreate(false); }}
-        onSubmit={(body) => create.mutate(body)}
-        pending={create.isPending}
-        error={create.error ? (create.error as Error).message : null}
+        onClose={() => { if (!mint.isPending) setShowMint(false); }}
+        onSubmit={(body) => mint.mutate(body)}
+        pending={mint.isPending}
+        error={mint.error ? (mint.error as Error).message : null}
       />
 
       <RevealModal
@@ -160,26 +188,28 @@ export function ApiTokensSection() {
   );
 }
 
-function TokenRow({
-  token, busy, onRevoke,
+function ClientRow({
+  client: c, busyRevoke, busyRotate, onRevoke, onRotate,
 }: {
-  token: ApiToken;
-  busy: boolean;
+  client: Client;
+  busyRevoke: boolean;
+  busyRotate: boolean;
   onRevoke: () => void;
+  onRotate: () => void;
 }) {
-  const isRevoked = !!token.revoked_at;
+  const isRevoked = !!c.revoked_at;
   return (
     <tr className="bg-bg-base/30">
       <td className="px-4 py-3 text-ink-1">
-        <div className="font-medium">{token.name}</div>
-        <div className="mt-0.5 font-mono text-[10.5px] text-ink-3">…{token.id.slice(-10)}</div>
+        <div className="font-medium">{c.display_name}</div>
+        <div className="mt-0.5 break-all font-mono text-[10.5px] text-ink-3">{c.name}</div>
       </td>
       <td className="px-4 py-3">
-        <ScopePill scope={token.scope} />
+        <ScopePill scope={c.scope} />
       </td>
-      <td className="px-4 py-3 text-ink-2">{new Date(token.created_at).toLocaleString()}</td>
+      <td className="px-4 py-3 text-ink-2">{new Date(c.created_at).toLocaleString()}</td>
       <td className="px-4 py-3 text-ink-3">
-        {token.last_used_at ? new Date(token.last_used_at).toLocaleString() : '—'}
+        {c.last_used_at ? new Date(c.last_used_at).toLocaleString() : '—'}
       </td>
       <td className="px-4 py-3">
         {isRevoked ? (
@@ -192,14 +222,24 @@ function TokenRow({
         {isRevoked ? (
           <span className="text-[12px] text-ink-3">—</span>
         ) : (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onRevoke}
-            className="btn-ghost focus-ring text-[12px] text-status-blocked-600 disabled:opacity-50"
-          >
-            {busy ? 'Revoking…' : 'Revoke'}
-          </button>
+          <div className="inline-flex gap-1.5">
+            <button
+              type="button"
+              disabled={busyRotate}
+              onClick={onRotate}
+              className="btn-ghost focus-ring text-[12px] text-brand-500 disabled:opacity-50"
+            >
+              {busyRotate ? 'Rotating…' : 'Rotate'}
+            </button>
+            <button
+              type="button"
+              disabled={busyRevoke}
+              onClick={onRevoke}
+              className="btn-ghost focus-ring text-[12px] text-status-blocked-600 disabled:opacity-50"
+            >
+              {busyRevoke ? 'Revoking…' : 'Revoke'}
+            </button>
+          </div>
         )}
       </td>
     </tr>
@@ -212,7 +252,7 @@ function ScopePill({ scope }: { scope: ApiTokenScope }) {
   return <Pill kind="backlog" dot={false}>read</Pill>;
 }
 
-function CreateModal({
+function MintModal({
   open, isAdmin, onClose, onSubmit, pending, error,
 }: {
   open: boolean;
@@ -237,7 +277,7 @@ function CreateModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Create API token" size="md">
+    <Modal open={open} onClose={onClose} title="Mint personal client" size="md">
       <form onSubmit={submit} className="space-y-4" noValidate>
         <p className="text-[12.5px] text-ink-2">
           The bearer is shown exactly once. Copy it into your MCP client config (e.g. Claude Code's
@@ -305,7 +345,7 @@ function CreateModal({
             disabled={pending}
             className="btn-primary focus-ring px-4 py-2 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {pending ? 'Creating…' : 'Create token'}
+            {pending ? 'Minting…' : 'Mint client'}
           </button>
         </div>
       </form>
@@ -328,7 +368,7 @@ function ScopeRadio({
     <label className={`flex items-start gap-2.5 rounded-lg border border-border-subtle bg-bg-sunken/30 p-2.5 ${disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-bg-sunken/60'}`}>
       <input
         type="radio"
-        name="token-scope"
+        name="client-scope"
         value={value}
         checked={checked}
         defaultChecked={defaultChecked}
@@ -354,10 +394,10 @@ function RevealModal({
 }) {
   if (!revealed) return null;
   return (
-    <Modal open onClose={onClose} title="Token created" size="md">
+    <Modal open onClose={onClose} title="Client minted" size="md">
       <div className="space-y-3.5">
         <div className="rounded-lg border border-status-ready-500/40 bg-status-ready-500/10 p-3 text-[12.5px] text-status-ready-600">
-          Copy this token now. It will not be shown again.
+          Copy this bearer now. It will not be shown again.
         </div>
         <Field label="Name"><div className="text-[13.5px] text-ink-1">{revealed.name}</div></Field>
         <Field label="Scope"><ScopePill scope={revealed.scope} /></Field>
@@ -397,3 +437,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </div>
   );
 }
+
+// Re-export the old name so any caller still importing
+// `ApiTokensSection` from this file gets a clear message instead
+// of a missing symbol.
+export { PersonalClientsSection as ApiTokensSection };

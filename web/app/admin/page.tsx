@@ -9,8 +9,8 @@ import { EmptyState } from '../../components/EmptyState';
 
 export default function AdminPage() {
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['sources'],
-    queryFn: () => api.listSources(),
+    queryKey: ['clients'],
+    queryFn: () => api.listClients(),
   });
 
   const [showManifest, setShowManifest] = useState(false);
@@ -22,6 +22,13 @@ export default function AdminPage() {
         <h1 className="text-2xl font-bold tracking-tight text-ink-1">Connector Admin</h1>
         <p className="text-[13px] text-ink-2">Manage sources, the enricher pool, and webhook deliveries.</p>
       </header>
+
+      <nav className="flex flex-wrap gap-2" aria-label="Admin sections">
+        <a href="/admin/install" className="btn-primary focus-ring px-3 py-1.5 text-[12.5px]">Install an agent →</a>
+        <a href="/admin/analytics" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Call traces</a>
+        <a href="/admin/boards" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Boards</a>
+        <a href="/admin/users" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Users</a>
+      </nav>
 
       <Section
         title="Enricher pool"
@@ -47,7 +54,7 @@ export default function AdminPage() {
       >
         {showEnricherPool ? (
           <ul className="space-y-2">
-            {(data?.sources ?? []).map((s) => (
+            {(data?.clients ?? []).map((s) => (
               <li
                 key={s.name}
                 className="card-inset flex items-center justify-between px-3.5 py-2.5 text-[13px]"
@@ -71,8 +78,8 @@ export default function AdminPage() {
                 <span className="kbd">v0 stretch</span>
               </li>
             ))}
-            {(data?.sources ?? []).length === 0 ? (
-              <p className="text-[12px] text-ink-3">No sources registered yet.</p>
+            {(data?.clients ?? []).length === 0 ? (
+              <p className="text-[12px] text-ink-3">No clients registered yet.</p>
             ) : null}
           </ul>
         ) : null}
@@ -83,16 +90,16 @@ export default function AdminPage() {
         eyebrow="live traffic"
         description={
           <>
-            Incoming and outgoing webhook traffic is logged on the Sources view. The last 100 commands
-            and conflicts are visible there too.
+            Incoming and outgoing webhook traffic is logged on the <a href="/clients" className="text-brand-500 underline">Clients</a> and
+            <a href="/connectors" className="ml-1 text-brand-500 underline">Connectors</a> pages. The last 100 commands and conflicts are visible there too.
           </>
         }
       />
 
       <Section
-        title="Sources"
+        title="Clients"
         eyebrow="ingest"
-        description="Connectors that submit work items to WorkTracker."
+        description="Every authenticated identity that calls the API. See /clients for the full management page."
         action={
           <div className="flex gap-2">
             <button
@@ -102,13 +109,12 @@ export default function AdminPage() {
             >
               Refresh
             </button>
-            <button
-              type="button"
-              onClick={() => setShowManifest(true)}
+            <a
+              href="/clients"
               className="btn-primary focus-ring"
             >
-              Register new
-            </button>
+              Manage clients →
+            </a>
           </div>
         }
       >
@@ -120,31 +126,44 @@ export default function AdminPage() {
           </ul>
         ) : null}
         {error ? (
-          <p className="text-[13px] text-status-blocked">Failed to load sources.</p>
+          <p className="text-[13px] text-status-blocked">Failed to load clients.</p>
         ) : null}
-        {data && data.sources.length > 0 ? (
+        {data && data.clients.length > 0 ? (
           <ul className="space-y-2">
-            {data.sources.map((s) => (
+            {data.clients.slice(0, 8).map((s) => (
               <li key={s.name} className="card-inset flex items-center justify-between gap-3 px-3.5 py-2.5 text-[13px]">
                 <div className="min-w-0 space-y-0.5">
                   <p className="truncate font-medium text-ink-1">{s.display_name}</p>
                   <p className="truncate font-mono text-[11px] text-ink-3">{s.name}</p>
                 </div>
-                <Pill kind="ready" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
-                  {s.kind}
-                </Pill>
+                <div className="flex items-center gap-1.5">
+                  <Pill
+                    kind={s.scope === 'admin' ? 'ready' : s.scope === 'read_write' ? 'progress' : 'backlog'}
+                    dot={false}
+                  >
+                    {s.scope}
+                  </Pill>
+                  <Pill kind="backlog" dot={false} className="!ring-border-subtle !bg-bg-sunken !text-ink-2">
+                    {s.kind}
+                  </Pill>
+                </div>
               </li>
             ))}
+            {data.clients.length > 8 ? (
+              <li className="text-center text-[12px] text-ink-3">
+                +{data.clients.length - 8} more — see /clients.
+              </li>
+            ) : null}
           </ul>
         ) : null}
-        {data && data.sources.length === 0 ? (
+        {data && data.clients.length === 0 ? (
           <EmptyState
-            title="No sources yet"
-            body="Sources are the connectors that submit work items — for example, a chat agent, a CI bot, or an inbox watcher."
+            title="No clients yet"
+            body="Clients are the authenticated identities that submit work items — for example, a chat agent, a CI bot, or an inbox watcher."
             action={
-              <button type="button" onClick={() => setShowManifest(true)} className="btn-primary focus-ring">
-                Register a source
-              </button>
+              <a href="/clients" className="btn-primary focus-ring">
+                Register a client
+              </a>
             }
           />
         ) : null}
@@ -166,28 +185,30 @@ export default function AdminPage() {
 
       <DeadLetterPanel />
 
-      <Modal open={showManifest} onClose={() => setShowManifest(false)} title="Source manifest reference" size="lg">
+      <Modal open={showManifest} onClose={() => setShowManifest(false)} title="Client manifest reference" size="lg">
         <p className="mb-3 text-[13px] text-ink-2">
-          POST this JSON to <code className="rounded bg-bg-sunken px-1.5 py-0.5 text-ink-1">/api/sources</code> to register a new source. The
-          token in the manifest is the source's bearer — keep it server-side; the web client uses
-          the admin token instead.
+          POST this JSON to <code className="rounded bg-bg-sunken px-1.5 py-0.5 text-ink-1">/api/clients</code> to register a new agent
+          client. The bearer is returned once in the response — keep it server-side; the web client uses the admin token instead.
         </p>
         <pre className="card-inset overflow-x-auto p-3 font-mono text-[11.5px] leading-5 text-ink-1">
 {`{
-  "name": "hermes",
-  "display_name": "Hermes",
-  "kind": "agent",
-  "capabilities": [
-    "create", "update", "transition", "comment", "link",
-    "enrich:grill", "enrich:wayfind"
-  ],
-  "webhook_url": null,
-  "icon": null,
-  "version": "1.0.0",
-  "enricher": {
-    "grill":   { "kind": "skill", "skill_path": "~/.cline/skills/grill",     "command": "grill" },
-    "wayfind": { "kind": "skill", "skill_path": "~/.cline/skills/wayfinder", "command": "wayfind" }
-  }
+  "manifest": {
+    "name": "hermes",
+    "display_name": "Hermes",
+    "kind": "agent",
+    "capabilities": [
+      "create", "update", "transition", "comment", "link",
+      "enrich:grill", "enrich:wayfind"
+    ],
+    "webhook_url": null,
+    "icon": null,
+    "version": "1.0.0",
+    "enricher": {
+      "grill":   { "kind": "skill", "skill_path": "~/.cline/skills/grill",     "command": "grill" },
+      "wayfind": { "kind": "skill", "skill_path": "~/.cline/skills/wayfinder", "command": "wayfind" }
+    }
+  },
+  "scope": "read_write"
 }`}
         </pre>
       </Modal>
