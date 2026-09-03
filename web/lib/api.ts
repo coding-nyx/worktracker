@@ -231,6 +231,41 @@ export const api = {
       'POST',
       `/api/commands/${id}/replay`,
     ),
+
+  // Slice 6+7: wizard + analytics.
+  inviteConnector: (name: string) =>
+    request<{
+      protocol: { name: string; display_name: string; blurb: string; install_steps: string[] };
+      bearer: string;
+      endpoint: string;
+      verify_command: string;
+    }>('POST', `/api/connectors/${encodeURIComponent(name)}/invite`),
+  listCallTraces: (q: { outcome?: string; agent?: string; tool?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(q)) {
+      if (v !== undefined && v !== '') params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return request<{
+      traces: Array<{
+        id: string;
+        ts: string;
+        agent: string;
+        bearer_id: string;
+        tool?: string;
+        outcome: string;
+        response?: { status: number; latency_ms: number };
+        error?: { code: number; message: string };
+      }>;
+      next_cursor: string | null;
+      summary: { total: number; success: number; auth_failed: number; server_error: number; client_error: number };
+    }>('GET', `/api/analytics/call-traces${qs ? `?${qs}` : ''}`);
+  },
+  callTracesSummary: () =>
+    request<{ summary: { total: number; success: number; auth_failed: number; server_error: number; client_error: number } }>(
+      'GET',
+      '/api/analytics/call-traces/summary',
+    ),
 };
 
 // Re-export the kinds the UI cares about for tight imports.

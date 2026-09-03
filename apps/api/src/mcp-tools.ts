@@ -49,6 +49,7 @@ import { ulid, nowIso } from './ids.js';
 import { getDb } from './firestore.js';
 import { InvalidInputError } from './errors.js';
 import { canTransition } from '@worktracker/types';
+import { recordCallTrace, mapDispatchOutcome } from './analytics.js';
 
 const SCOPE_RANK: Record<ApiTokenScope, number> = {
   read: 1,
@@ -951,19 +952,23 @@ export async function dispatchTool(
 ): Promise<ToolDispatchResult> {
   const tool = findTool(name);
   if (!tool) {
-    return { ok: false, error: `unknown tool: ${name}`, code: -32601 };
+    const result: ToolDispatchResult = { ok: false, error: `unknown tool: ${name}`, code: -32601 };
+    void recordTrace(name, req, result);
+    return result;
   }
   const ctx = buildToolContext(req);
   if (!scopeAtLeast(ctx.effectiveScope, tool.required_scope)) {
-    return {
+    const result: ToolDispatchResult = {
       ok: false,
       error: `tool ${name} requires ${tool.required_scope} scope (effective: ${ctx.effectiveScope})`,
       code: -32603,
     };
+    void recordTrace(name, req, result);
+    return result;
   }
   const parsed = tool.schema.safeParse(arguments_ ?? {});
   if (!parsed.success) {
-    return {
+    const result: ToolDispatchResult = {
       ok: false,
       error: `arguments for ${name} failed schema validation: ${parsed.error.issues
         .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
@@ -971,31 +976,84 @@ export async function dispatchTool(
       code: -32602,
       data: { issues: parsed.error.issues },
     };
+    void recordTrace(name, req, result);
+    return result;
   }
+  const start = Date.now();
   try {
     const value = await tool.handler(parsed.data, ctx);
-    return { ok: true, value };
+    const result: ToolDispatchResult = { ok: true, value };
+    void recordTrace(name, req, result, Date.now() - start);
+    return result;
   } catch (err) {
+    let result: ToolDispatchResult;
     if (err instanceof InvalidInputError) {
-      return {
+      result = {
         ok: false,
         error: err.message,
         code: -32602,
         data: err.details,
       };
-    }
-    if (err && typeof err === 'object' && 'name' in err && err.name === 'WorkTrackerError') {
-      return {
+    } else if (err && typeof err === 'object' && 'name' in err && err.name === 'WorkTrackerError') {
+      result = {
         ok: false,
         error: (err as Error).message,
         code: -32603,
       };
+    } else {
+      result = {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        code: -32603,
+      };
     }
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-      code: -32603,
-    };
+    void recordTrace(name, req, result, Date.now() - start);
+    return result;
+  }
+}
+
+/**
+ * Best-effort analytics write. The dispatcher doesn't await
+ * the trace (it's a side-channel; latency-sensitive calls
+ * shouldn't block on Firestore), but the failure mode is
+ * "lost trace row", never "broken tool call".
+ */
+async function recordTrace(
+  name: string,
+  req: FastifyRequest,
+  result: ToolDispatchResult,
+  latencyMs?: number,
+): Promise<void> {
+  try {
+    const mapped = mapDispatchOutcome(result.ok, result.code, result.error);
+    const bearerId = req.auth?.source?.name
+      ? `clients/${req.auth.source.name}`
+      : req.auth?.user
+        ? `users/${req.auth.user.firebase_uid}`
+        : 'anonymous';
+    const agent = (req.headers['user-agent'] ?? 'unknown')
+      .toString()
+      .split(' ')[0]
+      .toLowerCase()
+      .slice(0, 64);
+    await recordCallTrace({
+      agent,
+      bearer_id: bearerId,
+      context: 'mcp_call',
+      tool: name,
+      request: {
+        method: req.method,
+        path: req.url,
+      },
+      outcome: mapped.outcome,
+      ...(latencyMs !== undefined
+        ? { response: { status: 200, latency_ms: latencyMs } }
+        : {}),
+      ...(mapped.error ? { error: mapped.error } : {}),
+    });
+  } catch {
+    // The trace write is best-effort; swallow errors so a
+    // Firestore blip doesn't bubble up as a tool call failure.
   }
 }
 

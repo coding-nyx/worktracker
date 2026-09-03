@@ -23,6 +23,13 @@ export default function AdminPage() {
         <p className="text-[13px] text-ink-2">Manage sources, the enricher pool, and webhook deliveries.</p>
       </header>
 
+      <nav className="flex flex-wrap gap-2" aria-label="Admin sections">
+        <a href="/admin/install" className="btn-primary focus-ring px-3 py-1.5 text-[12.5px]">Install an agent →</a>
+        <a href="/admin/analytics" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Call traces</a>
+        <a href="/admin/boards" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Boards</a>
+        <a href="/admin/users" className="btn-secondary focus-ring px-3 py-1.5 text-[12.5px]">Users</a>
+      </nav>
+
       <Section
         title="Enricher pool"
         eyebrow="AI"

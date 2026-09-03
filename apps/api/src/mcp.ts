@@ -26,6 +26,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { requireSource, getEffectiveScope } from './auth.js';
 import { dispatchTool, listToolsForScope, findTool } from './mcp-tools.js';
+import { attachTrace, logTraceEvent, newRequestTrace } from './trace.js';
 
 // ----- JSON-RPC 2.0 envelopes -----
 
@@ -373,10 +374,14 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // JSON-RPC 2.0 over HTTP (per MCP spec, accepts a single
   // request or a batch).
   app.post('/api/mcp', { preHandler: requireSource }, async (req, reply) => {
+    const trace = newRequestTrace();
+    attachTrace(req, trace);
+    logTraceEvent(req, 'mcp.request', { path: '/api/mcp' });
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
     const payload = Array.isArray(body) ? responses : responses[0];
+    reply.header('X-Request-Id', trace.requestId);
     reply.send(payload);
   });
 
@@ -385,10 +390,14 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // re-runs the preHandler so `requireSource` enforces auth at
   // either entry point.
   app.post('/mcp', { preHandler: requireSource }, async (req, reply) => {
+    const trace = newRequestTrace();
+    attachTrace(req, trace);
+    logTraceEvent(req, 'mcp.request', { path: '/mcp' });
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
     const payload = Array.isArray(body) ? responses : responses[0];
+    reply.header('X-Request-Id', trace.requestId);
     reply.send(payload);
   });
 
@@ -408,6 +417,9 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     reply.code(405).send({ error: 'GET /mcp/stream not supported; POST JSON-RPC to /mcp/stream' });
   });
   app.post('/mcp/stream', { preHandler: requireSource }, async (req, reply) => {
+    const trace = newRequestTrace();
+    attachTrace(req, trace);
+    logTraceEvent(req, 'mcp.request', { path: '/mcp/stream' });
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
@@ -417,6 +429,7 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     // session resumption — for now it's a per-request token.
     const sessionId = randomBytes(16).toString('hex');
     reply.header('Mcp-Session-Id', sessionId);
+    reply.header('X-Request-Id', trace.requestId);
     reply.send(payload);
   });
 }
@@ -445,11 +458,24 @@ async function handleRpc(req: JsonRpcRequest, httpReq: FastifyRequest): Promise<
       }
       case 'tools/call': {
         const params = (req.params ?? {}) as { name: string; arguments?: unknown };
+        const { logTraceEvent } = await import('./trace.js');
+        logTraceEvent(httpReq, 'mcp.tool.call.start', { tool: params.name });
         const result = await dispatchTool(params.name, params.arguments, httpReq);
         if (result.ok) {
+          logTraceEvent(httpReq, 'mcp.tool.call.ok', { tool: params.name });
           return { jsonrpc: '2.0', id: req.id, result: result.value };
         }
-        return rpcError(req, result.code ?? -32603, result.error ?? 'internal error', result.data);
+        logTraceEvent(httpReq, 'mcp.tool.call.error', {
+          tool: params.name,
+          code: result.code ?? -32603,
+          error: result.error,
+        });
+        return rpcError(
+          req,
+          result.code ?? -32603,
+          result.error ?? 'internal error',
+          { ...(result.data as Record<string, unknown> | undefined ?? {}), request_id: getTraceId(httpReq) },
+        );
       }
       default:
         return rpcError(req, -32601, `unknown method: ${req.method}`);
@@ -466,4 +492,8 @@ function rpcError(
   data?: unknown,
 ): JsonRpcResponse {
   return { jsonrpc: '2.0', id: req.id, error: { code, message, ...(data ? { data } : {}) } };
+}
+
+function getTraceId(req: FastifyRequest): string {
+  return (req as { trace?: { requestId: string } }).trace?.requestId ?? 'unknown';
 }

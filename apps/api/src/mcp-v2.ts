@@ -26,6 +26,7 @@ import {
   type ToolDispatchResult,
 } from './mcp-tools.js';
 import type { JsonRpcRequest, JsonRpcResponse } from './mcp.js';
+import { attachTrace, getTrace, logTraceEvent, newRequestTrace } from './trace.js';
 
 export async function mcpRoutesV2(app: FastifyInstance): Promise<void> {
   const getHandler = async (
@@ -38,15 +39,23 @@ export async function mcpRoutesV2(app: FastifyInstance): Promise<void> {
   app.get('/mcp/v2', { preHandler: requireSource }, getHandler);
 
   app.post('/api/mcp/v2', { preHandler: requireSource }, async (req, reply) => {
+    const trace = newRequestTrace();
+    attachTrace(req, trace);
+    logTraceEvent(req, 'mcp.request', { path: '/api/mcp/v2' });
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpcV2(r, req)));
+    reply.header('X-Request-Id', trace.requestId);
     reply.send(Array.isArray(body) ? responses : responses[0]);
   });
   app.post('/mcp/v2', { preHandler: requireSource }, async (req, reply) => {
+    const trace = newRequestTrace();
+    attachTrace(req, trace);
+    logTraceEvent(req, 'mcp.request', { path: '/mcp/v2' });
     const body = req.body as JsonRpcRequest | JsonRpcRequest[];
     const requests = Array.isArray(body) ? body : [body];
     const responses = await Promise.all(requests.map((r) => handleRpcV2(r, req)));
+    reply.header('X-Request-Id', trace.requestId);
     reply.send(Array.isArray(body) ? responses : responses[0]);
   });
 }
@@ -76,7 +85,16 @@ async function handleRpcV2(
       }
       case 'tools/call': {
         const params = (req.params ?? {}) as { name: string; arguments?: unknown };
+        logTraceEvent(httpReq, 'mcp.tool.call.start', { tool: params.name });
         const result = await dispatchTool(params.name, params.arguments, httpReq);
+        if (result.ok) {
+          logTraceEvent(httpReq, 'mcp.tool.call.ok', { tool: params.name });
+        } else {
+          logTraceEvent(httpReq, 'mcp.tool.call.error', {
+            tool: params.name,
+            code: result.code ?? -32603,
+          });
+        }
         return v2ToolResult(req, result);
       }
       default:

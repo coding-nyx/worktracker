@@ -27,6 +27,7 @@ import { applyCommand, readWorkItem } from './repo.js';
 import { ulid, nowIso } from './ids.js';
 import { WorkTrackerError } from './errors.js';
 import { getDb } from './firestore.js';
+import { logTraceEvent, newRequestTrace } from './trace.js';
 
 export interface BrainOptions {
   /** Override the db (for local dev or tests). */
@@ -101,6 +102,12 @@ export async function handleCommandCreated(
   }
 
   // 2. Run the command in a transaction.
+  // Slice 5: the brain runs `db.runTransaction` so the read,
+  // validation, and the work-item write (with version bump +
+  // event append) are atomic. The transaction's commit either
+  // lands everything or nothing; a concurrent mutation is
+  // detected on the second attempt and the caller can retry.
+  const trace = newRequestTrace();
   try {
     const result = await db.runTransaction(async (tx) => {
       return await applyCommand({
@@ -111,6 +118,11 @@ export async function handleCommandCreated(
       });
     });
     await markApplied(db, command, result?.event.id ?? null);
+    logTraceEvent(trace, 'brain.applied', {
+      command_id: command.id,
+      op: command.op,
+      item_id: command.item_id,
+    });
   } catch (err) {
     if (err instanceof WorkTrackerError) {
       // Structured error: the command payload violated an
@@ -118,6 +130,12 @@ export async function handleCommandCreated(
       // unknown source, etc.). Mark as `rejected` immediately;
       // no need to retry.
       await recordConflictAndReject(db, command, err.code, err.message, actor);
+      logTraceEvent(trace, 'brain.rejected', {
+        command_id: command.id,
+        op: command.op,
+        code: err.code,
+        message: err.message,
+      });
       return;
     }
     // Unknown failure: record and decide whether to give up.
@@ -131,6 +149,12 @@ export async function handleCommandCreated(
       // retrying and the source can introspect `commands/{id}`
       // and `commands/{id}/failures/` to diagnose.
       await markFailed(db, command, message);
+      logTraceEvent(trace, 'brain.failed', {
+        command_id: command.id,
+        op: command.op,
+        message,
+        failure_count: nextCount,
+      });
       console.error(
         '[brain] command',
         command.id,
