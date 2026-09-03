@@ -56,13 +56,13 @@ export default function AdminPage() {
                   <p className="font-medium text-ink-1">{s.display_name}</p>
                   <p className="text-[11px] text-ink-3">
                     grill: {s.capabilities.includes('enrich:grill') ? (
-                      <span className="text-status-done-600">✓ capable</span>
+                      <span className="text-status-done">✓ capable</span>
                     ) : (
                       <span className="text-ink-4">—</span>
                     )}{' '}
                     · wayfind:{' '}
                     {s.capabilities.includes('enrich:wayfind') ? (
-                      <span className="text-status-done-600">✓ capable</span>
+                      <span className="text-status-done">✓ capable</span>
                     ) : (
                       <span className="text-ink-4">—</span>
                     )}
@@ -120,7 +120,7 @@ export default function AdminPage() {
           </ul>
         ) : null}
         {error ? (
-          <p className="text-[13px] text-status-blocked-600">Failed to load sources.</p>
+          <p className="text-[13px] text-status-blocked">Failed to load sources.</p>
         ) : null}
         {data && data.sources.length > 0 ? (
           <ul className="space-y-2">
@@ -269,7 +269,7 @@ function DeadLetterPanel() {
       </div>
       <div className="px-5 py-4">
         {isLoading ? <p className="text-[13px] text-ink-3">Loading…</p> : null}
-        {error ? <p className="text-[13px] text-status-blocked-600">Failed to load.</p> : null}
+        {error ? <p className="text-[13px] text-status-blocked">Failed to load.</p> : null}
         {data && data.length === 0 ? (
           <EmptyState
             icon={<span aria-hidden>🎉</span>}
@@ -289,7 +289,7 @@ function DeadLetterPanel() {
                       onClick={() => setSelectedId(c.id)}
                       className={`focus-ring w-full rounded-xl border px-3 py-2 text-left text-[13px] transition-all duration-150 ease-out-quint ${
                         isSelected
-                          ? 'border-brand-500/60 bg-brand-500/5 shadow-glow'
+                          ? 'border-brand-500/60 bg-brand-500/5 shadow-glow-cyan'
                           : 'border-border-subtle bg-bg-surface hover:border-border-default'
                       }`}
                     >
@@ -325,10 +325,10 @@ function DeadLetterPanel() {
                     </button>
                   </div>
                   {replay.isSuccess ? (
-                    <p className="mt-2 text-[12px] text-status-done-600">Re-queued. The brain trigger will pick it up.</p>
+                    <p className="mt-2 text-[12px] text-status-done">Re-queued. The brain trigger will pick it up.</p>
                   ) : null}
                   {replay.isError ? (
-                    <p className="mt-2 text-[12px] text-status-blocked-600">Replay failed: {String(replay.error)}</p>
+                    <p className="mt-2 text-[12px] text-status-blocked">Replay failed: {String(replay.error)}</p>
                   ) : null}
                   <h3 className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-ink-3">
                     Failure history

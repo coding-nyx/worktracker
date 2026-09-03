@@ -70,7 +70,7 @@ export default function BoardsAdminPage() {
           ))}
         </ul>
       ) : null}
-      {error ? <p className="text-[13px] text-status-blocked-600">Failed to load boards.</p> : null}
+      {error ? <p className="text-[13px] text-status-blocked">Failed to load boards.</p> : null}
 
       {!isLoading && boards.length === 0 ? (
         <EmptyState
@@ -97,7 +97,7 @@ export default function BoardsAdminPage() {
                     {b.name}
                   </h3>
                   {b.is_default ? (
-                    <Pill kind="ready" dot={false} className="!ring-status-ready-500/40 !bg-status-ready-500/10 !text-status-ready-600">
+                    <Pill kind="ready" dot={false} className="!ring-status-ready/40 !bg-status-ready/10 !text-status-ready">
                       <span aria-hidden>★</span>
                       <span>default</span>
                     </Pill>
@@ -363,7 +363,7 @@ function BoardEditor({
                   <button
                     type="button"
                     onClick={() => removeColumn(idx)}
-                    className="btn-ghost focus-ring !px-2 !py-0.5 text-[12px] text-status-blocked-600"
+                    className="btn-ghost focus-ring !px-2 !py-0.5 text-[12px] text-status-blocked"
                   >
                     Remove
                   </button>
@@ -376,7 +376,7 @@ function BoardEditor({
           </div>
         </fieldset>
 
-        {error ? <p className="text-[13px] text-status-blocked-600">{(error as Error).message}</p> : null}
+        {error ? <p className="text-[13px] text-status-blocked">{(error as Error).message}</p> : null}
       </div>
     </Modal>
   );

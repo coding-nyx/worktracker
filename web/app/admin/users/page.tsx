@@ -75,7 +75,7 @@ export default function AdminUsersPage() {
       {pageError ? (
         <div
           role="alert"
-          className="rounded-lg border border-status-blocked-500/40 bg-status-blocked-500/10 px-3 py-2 text-[12.5px] text-status-blocked-600"
+          className="rounded-lg border border-status-blocked/40 bg-status-blocked/10 px-3 py-2 font-mono text-[11.5px] tracking-mono-wide text-status-blocked"
         >
           {pageError}
           <button onClick={() => setPageError(null)} className="ml-3 underline">dismiss</button>
@@ -85,7 +85,7 @@ export default function AdminUsersPage() {
       {isLoading ? (
         <div className="text-[13px] text-ink-3">Loading users…</div>
       ) : error ? (
-        <div className="rounded-lg border border-status-blocked-500/40 bg-status-blocked-500/10 px-3 py-2 text-[12.5px] text-status-blocked-600">
+        <div className="rounded-lg border border-status-blocked/40 bg-status-blocked/10 px-3 py-2 font-mono text-[11.5px] tracking-mono-wide text-status-blocked">
           {(error as Error).message}
         </div>
       ) : users.length === 0 ? (
@@ -151,7 +151,7 @@ function UserRow({
         <div className="flex items-center gap-2">
           <span className="font-medium">{user.email || <span className="italic text-ink-3">no email</span>}</span>
           {isSelf ? (
-            <Pill kind="ready" dot={false} className="!ring-status-ready-500/30 !bg-status-ready-500/10 !text-status-ready-600">
+            <Pill kind="ready" dot={false} className="!ring-status-ready/30 !bg-status-ready/10 !text-status-ready">
               you
             </Pill>
           ) : null}
@@ -289,7 +289,7 @@ function InviteModal({
         {(localError || error) ? (
           <div
             role="alert"
-            className="rounded-lg border border-status-blocked-500/40 bg-status-blocked-500/10 px-3 py-2 text-[12.5px] text-status-blocked-600"
+            className="rounded-lg border border-status-blocked/40 bg-status-blocked/10 px-3 py-2 font-mono text-[11.5px] tracking-mono-wide text-status-blocked"
           >
             {localError || error}
           </div>

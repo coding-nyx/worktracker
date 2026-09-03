@@ -3,72 +3,60 @@
 @tailwind utilities;
 
 /* ------------------------------------------------------------------------- */
-/* Theme tokens — dark is the default. The [data-theme="light"] block on
-   <html> re-binds the same names to a light palette. Everything in the
-   app reads from `rgb(var(--token))` so a theme flip is one attribute
-   change. */
+/* Cyberpunk minimalist tokens — dark only.
 
+   Two accents:
+     cyan #00E5FF     structure / links / primary / focus / dispatch CTA
+     magenta #FF2BD6  dispatch / active / alert / live-update
+
+   Surfaces are near-black with a faint blue undertone. Borders are
+   barely-there hairlines (cyan-tinted). The canvas carries one
+   subtle radial gradient + a 32px hairline grid.
+
+   Avenir Next for prose; JetBrains Mono for data (IDs, timestamps,
+   MCP tool names, status pills, button labels). The mono font is
+   loaded in `app/layout.tsx` from Google Fonts. */
+
+/* All dark. The `[data-theme="dark"]` selector is preserved so
+   any caller that still toggles it (e.g. legacy code) doesn't
+   break — but the design is single-theme from here. */
 :root,
 :root[data-theme='dark'] {
-  /* Surfaces — cool near-black with a hint of blue, slightly
-     desaturated so brand accents pop. */
-  --bg-base:     10 12 18;       /* page background */
-  --bg-surface:  20 23 31;      /* cards, columns, panels */
-  --bg-raised:   27 31 41;      /* popovers, modals, hover */
-  --bg-sunken:   6 7 11;        /* inset wells, code blocks */
+  /* Surfaces */
+  --bg-base:    7 7 13;     /* page background, near-black */
+  --bg-surface: 12 12 24;   /* cards, columns, panels */
+  --bg-raised:  17 17 31;   /* popovers, modals, hover */
+  --bg-sunken:  5 5 16;     /* inset wells, code blocks */
 
-  /* Borders — barely-there by default, stronger for emphasis. */
-  --border-subtle:  35 39 51;
-  --border-default: 47 53 68;
-  --border-strong:  74 82 102;
+  /* Borders — same cyan triplet, applied with <alpha-value>. */
+  --border-subtle:  0 229 255;
+  --border-default: 0 229 255;
+  --border-strong:  0 229 255;
+  --border-active:  0 229 255;
 
-  /* Ink — three steps of contrast. */
-  --ink-1: 245 246 249;   /* primary text */
-  --ink-2: 161 166 181;   /* secondary text */
-  --ink-3: 108 113 133;   /* tertiary text / icons */
-  --ink-4: 70 75 92;      /* disabled / placeholder */
+  /* Ink — three steps of contrast, slightly blue-tinted. */
+  --ink-1: 244 244 250;   /* primary text */
+  --ink-2: 200 200 216;   /* secondary text */
+  --ink-3: 138 138 160;   /* tertiary / icons / mono labels */
+  --ink-4: 77 77 99;      /* disabled / placeholder */
 
-  /* Status hues — used by the column header, the card pill, the
-     counter dot. Light enough to read on dark, saturated enough
-     to be glanceable. */
-  --status-backlog-50:  243 244 248;  --status-backlog-500: 148 156 175;  --status-backlog-600: 203 209 220;
-  --status-ready-50:    219 234 254;  --status-ready-500:    96 165 250;  --status-ready-600:    147 197 253;
-  --status-progress-50: 254 243 199;  --status-progress-500: 245 158 11;  --status-progress-600: 253 186 116;
-  --status-blocked-50:  254 226 226;  --status-blocked-500:  239 68 68;  --status-blocked-600:   252 165 165;
-  --status-review-50:   237 233 254;  --status-review-500:   139 92 246; --status-review-600:    196 181 253;
-  --status-done-50:     220 252 231;  --status-done-500:     34 197 94;  --status-done-600:      134 239 172;
-}
-
-:root[data-theme='light'] {
-  --bg-base:     248 249 251;
-  --bg-surface:  255 255 255;
-  --bg-raised:   255 255 255;
-  --bg-sunken:   241 243 248;
-
-  --border-subtle:  230 233 240;
-  --border-default: 215 220 230;
-  --border-strong:  184 192 208;
-
-  --ink-1: 15 18 28;
-  --ink-2: 71 80 96;
-  --ink-3: 110 118 138;
-  --ink-4: 156 162 178;
-
-  --status-backlog-50:  241 243 248;  --status-backlog-500:  100 110 130;  --status-backlog-600:  55 65 81;
-  --status-ready-50:    226 239 254;  --status-ready-500:    37 99 235;   --status-ready-600:     29 78 184;
-  --status-progress-50: 254 240 207;  --status-progress-500: 202 122 8;   --status-progress-600:  146 87 4;
-  --status-blocked-50:  254 226 226;  --status-blocked-500:  220 38 38;  --status-blocked-600:   185 28 28;
-  --status-review-50:   238 232 255;  --status-review-500:   109 70 198; --status-review-600:    79 49 152;
-  --status-done-50:     220 252 226;  --status-done-500:     21 128 61;  --status-done-600:      22 101 52;
+  /* Status — flat single hex per status. */
+  --status-backlog:  138 138 160;   /* dim grey */
+  --status-ready:    0 229 255;     /* cyan */
+  --status-progress: 255 43 214;    /* magenta — the "in progress" beat */
+  --status-blocked:  245 158 11;    /* amber */
+  --status-review:   168 85 247;    /* violet */
+  --status-done:     34 211 164;    /* mint */
 }
 
 /* ------------------------------------------------------------------------- */
-/* Base — typography, smooth scrollbar, the radial background, focus ring. */
+/* Base — typography, smooth scrollbar, the canvas, focus ring. */
 
 html {
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
   font-feature-settings: 'cv11', 'ss01', 'cv02';
+  color-scheme: dark;
 }
 
 body {
@@ -78,89 +66,116 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-variant-numeric: tabular-nums;
-  background-image: theme('backgroundImage.page-dark');
+  /* Canvas: one radial top-right + 32px hairline grid. The radial
+     gives the canvas depth without ever being loud. The grid is
+     5% cyan lines at 32px, the canonical "cyberpunk backdrop"
+     at low intensity. */
+  background-image:
+    radial-gradient(1600px 900px at 100% -10%, rgb(0 229 255 / 0.06), transparent 60%),
+    linear-gradient(rgb(0 229 255 / 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(0 229 255 / 0.05) 1px, transparent 1px);
+  background-size: 100% 100%, 32px 32px, 32px 32px;
   background-attachment: fixed;
   min-height: 100vh;
 }
 
-:root[data-theme='light'] body {
-  background-image: radial-gradient(1200px 800px at 50% -10%, rgb(59 108 255 / 0.06), transparent 60%);
-}
-
 ::selection {
-  background: rgb(59 108 255 / 0.35);
+  background: rgb(0 229 255 / 0.35);
   color: rgb(var(--ink-1));
 }
 
-/* Scrollbar — subtle on the surface, full on hover. */
+/* Scrollbar — cyan-tinted, subtle on the surface. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(var(--border-default)) transparent;
+  scrollbar-color: rgb(0 229 255 / 0.20) transparent;
 }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: rgb(var(--border-default));
+  background-color: rgb(0 229 255 / 0.20);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-*::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--border-strong)); background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(0 229 255 / 0.35);
+  background-clip: padding-box;
+}
 
-/* Focus — visible but never ugly. */
+/* Focus — cyan glow ring. Two-stop so the ring sits on top of
+   any background. */
+:focus {
+  outline: none;
+}
 :focus-visible {
-  outline: 2px solid rgb(59 108 255);
+  outline: 2px solid rgb(0 229 255);
   outline-offset: 2px;
-  border-radius: 0.375rem;
+  border-radius: 4px;
 }
 
 /* ------------------------------------------------------------------------- */
 /* Component primitives — composed via @layer components so utilities
-   still win, but the recurring shapes (card, pill, button) live once. */
+   still win, but the recurring shapes live once. */
 
 @layer components {
+  /* Card — hairline 1px border, flat surface. No shadow by default. */
   .card {
-    @apply rounded-2xl border border-border-subtle bg-bg-surface shadow-card;
+    @apply rounded-lg border border-border-subtle/40 bg-bg-surface;
   }
   .card-raised {
-    @apply rounded-2xl border border-border-default bg-bg-raised shadow-card-lg;
+    @apply rounded-lg border border-border-default/40 bg-bg-raised;
   }
   .card-inset {
-    @apply rounded-xl border border-border-subtle bg-bg-sunken;
+    @apply rounded-md border border-border-subtle/40 bg-bg-sunken;
   }
   .hairline {
-    @apply h-px w-full bg-border-subtle;
+    @apply h-px w-full bg-border-subtle/40;
   }
+
+  /* Pill — mono caps, hairline ring, low-opacity tint. */
   .pill {
-    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4 ring-1 ring-inset;
+    @apply inline-flex items-center gap-1.5 rounded-sm px-2 py-0.5 font-mono text-[10px] font-medium uppercase leading-4 tracking-mono-wide ring-1 ring-inset;
   }
+
+  /* Buttons — small radius, mono caps for primary/dispatch. */
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium leading-5 transition-all duration-150 ease-out-quint disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3.5 py-2 text-sm font-medium leading-5 transition-all duration-150 ease-out-quint disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-brand-500 text-white shadow-glow hover:bg-brand-400 active:translate-y-px;
+    @apply btn bg-brand-500 text-bg-base font-mono text-[11px] uppercase tracking-mono-wide hover:bg-brand-400 active:translate-y-px;
+  }
+  .btn-dispatch {
+    @apply btn bg-magenta-500 text-bg-base font-mono text-[11px] uppercase tracking-mono-wide hover:bg-magenta-400 active:translate-y-px;
   }
   .btn-secondary {
-    @apply btn border border-border-default bg-bg-surface text-ink-1 hover:border-border-strong hover:bg-bg-raised;
+    @apply btn border border-border-default/40 bg-bg-surface text-ink-1 hover:border-border-strong/60 hover:bg-bg-raised;
   }
   .btn-ghost {
     @apply btn text-ink-2 hover:bg-bg-raised hover:text-ink-1;
   }
   .btn-danger {
-    @apply btn border border-danger-500/30 bg-danger-500/10 text-danger-500 hover:bg-danger-500/20;
+    @apply btn border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20;
   }
+
+  /* Form fields — focus state lands on the cyan glow. */
   .field {
-    @apply w-full rounded-lg border border-border-default bg-bg-surface px-3 py-2 text-sm text-ink-1 placeholder:text-ink-4 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/30;
+    @apply w-full rounded-md border border-border-default/40 bg-bg-surface px-3 py-2 text-sm text-ink-1 placeholder:text-ink-4 focus:border-brand-500/60 focus:outline-none focus:ring-2 focus:ring-brand-500/30;
   }
+
+  /* Nav links — secondary ink, hover raises, active is full ink + dot. */
   .nav-link {
     @apply inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-ink-2 transition-colors hover:bg-bg-raised hover:text-ink-1;
   }
   .nav-link-active {
     @apply text-ink-1;
   }
+
+  /* Keyboard hint chip. */
   .kbd {
-    @apply rounded border border-border-default bg-bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-ink-3;
+    @apply rounded border border-border-default/40 bg-bg-sunken px-1.5 py-0.5 font-mono text-[10px] text-ink-3;
   }
+
+  /* Skeleton loader. */
   .skeleton {
     @apply relative overflow-hidden rounded-md bg-bg-raised;
   }
@@ -171,17 +186,44 @@ body {
     background-size: 200% 100%;
     animation: shimmer 1.6s linear infinite;
   }
+
+  /* Focus ring utility — used on interactive elements. */
   .focus-ring {
     @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-base;
   }
-  /* Live status dot — the pulsing indicator for "live updates" etc. */
+
+  /* Live status dot — magenta pulse for "another user just updated". */
   .live-dot {
-    @apply relative inline-block h-1.5 w-1.5 rounded-full bg-success-500;
+    @apply relative inline-block h-1.5 w-1.5 rounded-full bg-status-progress;
   }
   .live-dot::after {
     content: '';
-    @apply absolute inset-0 rounded-full bg-success-500;
+    @apply absolute inset-0 rounded-full bg-status-progress;
     animation: pulse-ring 1.8s ease-out infinite;
+  }
+
+  /* Wordmark — mono caps cyan-500, widest tracking. */
+  .wordmark {
+    @apply font-mono text-[14px] font-medium uppercase tracking-mono-widest text-brand-500;
+  }
+
+  /* Section eyebrow — small mono caps cyan label. */
+  .eyebrow {
+    @apply font-mono text-[10px] font-medium uppercase tracking-mono-widest text-ink-3;
+  }
+
+  /* Dispatch scan — magenta sweep that runs across a button on click. */
+  .dispatch-scan {
+    @apply relative overflow-hidden;
+  }
+  .dispatch-scan::after {
+    content: '';
+    @apply pointer-events-none absolute inset-y-0 left-0 w-1/3;
+    background-image: theme('backgroundImage.scan-line');
+    transform: translateX(-100%);
+  }
+  .dispatch-scan.is-running::after {
+    animation: scan-sweep 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 }
 
