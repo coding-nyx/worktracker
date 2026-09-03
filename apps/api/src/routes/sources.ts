@@ -7,7 +7,8 @@ import { z } from 'zod';
 import { nowIso } from '../ids.js';
 import { getDb } from '../firestore.js';
 import { requireAdmin, requireSource, hashApiKey } from '../auth.js';
-import type { CreateSourceRequest, CreateSourceResponse, SourceManifest, SourceRegistration } from '@worktracker/types';
+import type { ApiTokenScope, CreateSourceRequest, CreateSourceResponse, SourceManifest, SourceRegistration } from '@worktracker/types';
+import { API_TOKEN_SCOPES } from '@worktracker/types';
 import { randomBytes } from 'node:crypto';
 
 const ManifestSchema = z.object({
@@ -41,6 +42,12 @@ const ManifestSchema = z.object({
 const CreateSourceSchema = z.object({
   manifest: ManifestSchema,
   api_key: z.string().min(16).max(256).optional(),
+  // Slice 1: every source declares its scope at registration.
+  // Defaults to `read_write` (the v0.4 implicit default). Admin
+  // callers can pass `admin` to mint an admin-scope source
+  // (used for the new Hermes connector, the operator's
+  // personal agent, etc.).
+  scope: z.enum(API_TOKEN_SCOPES).default('read_write'),
 });
 
 const PatchSourceSchema = z.object({
@@ -66,6 +73,7 @@ export async function sourcesRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/sources', { preHandler: requireAdmin }, async (req, reply) => {
     const body = CreateSourceSchema.parse(req.body) satisfies CreateSourceRequest;
     const manifest = body.manifest satisfies SourceManifest;
+    const scope: ApiTokenScope = body.scope;
     const plaintext = body.api_key ?? randomBytes(24).toString('base64url');
     const hash = await hashApiKey(plaintext);
     const now = nowIso();
@@ -73,6 +81,7 @@ export async function sourcesRoutes(app: FastifyInstance): Promise<void> {
       name: manifest.name,
       display_name: manifest.display_name,
       kind: manifest.kind,
+      scope,
       manifest,
       capabilities: manifest.capabilities,
       webhook_secret: null,

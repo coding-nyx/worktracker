@@ -204,6 +204,16 @@ export interface SourceRegistration {
   name: string;
   display_name: string;
   kind: SourceKind;
+  /**
+   * Effective permission scope of this source. Read by the auth
+   * middleware (`getEffectiveScope`) so `tools/list` is filtered
+   * per-token. The 5 board admin tools require `admin`; reads
+   * accept any scope. Defaults to `read_write` for legacy rows that
+   * predate slice 1; new sources declare their scope at
+   * registration time. Wrecking-ball: there is no allowlist
+   * fallback; this field is the single source of truth.
+   */
+  scope: ApiTokenScope;
   manifest: SourceManifest;
   capabilities: Capability[];
   webhook_secret: string | null;

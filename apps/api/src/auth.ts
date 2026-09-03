@@ -373,6 +373,11 @@ async function resolveApiTokenFromId(
     name: `token:${data.name}`,
     display_name: data.name,
     kind: 'agent',
+    // Slice 1: the synthetic source carries the token's scope
+    // so `getEffectiveScope` reads it through `source.scope` even
+    // when `req.auth.scope` is also set (which it is, redundantly
+    // — defense in depth).
+    scope: data.scope,
     // The synthetic source inherits the token's owner for
     // audit trails. The actual scope enforcement reads
     // `req.auth.scope` (set by `requireSource`).
@@ -412,30 +417,20 @@ async function resolveApiTokenFromId(
  * before API tokens existed. Unknown legacy sources stay at
  * `read_write`; new API tokens are the only callers that get
  * the explicit downscoped behavior.
+ *
+ * Slice 1 (wrecking ball): the `adminSources` allowlist is gone.
+ * A source's scope is whatever its `SourceRegistration.scope`
+ * field says. Legacy sources without the field default to
+ * `read_write`; the seed (slice 2) re-registers every source
+ * with an explicit scope.
  */
 export function getEffectiveScope(req: FastifyRequest): ApiTokenScope {
   if (req.auth?.kind === 'admin') return 'admin';
   if (req.auth?.source?.name === 'web') return 'admin';
   if (req.auth?.user?.is_admin === true) return 'admin';
-  if (isAdminSource(req)) return 'admin';
   if (req.auth?.scope) return req.auth.scope;
+  if (req.auth?.source?.scope) return req.auth.source.scope;
   return 'read_write';
-}
-
-/**
- * True when the caller is a legacy source bearer whose name is
- * on the admin allowlist AND whose source record is enabled.
- * Disabled sources are rejected upstream by `requireSource`
- * (throws `ForbiddenError('source disabled')`), so checking
- * `enabled` here is belt-and-braces.
- */
-function isAdminSource(req: FastifyRequest): boolean {
-  const auth = req.auth;
-  if (auth?.kind !== 'source') return false;
-  const source = auth.source;
-  if (!source || source.enabled === false) return false;
-  const allow = loadConfig().adminSources;
-  return allow.includes(source.name);
 }
 
 const SCOPE_RANK: Record<ApiTokenScope, number> = {

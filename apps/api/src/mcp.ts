@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { randomBytes } from 'node:crypto';
 import type {
   Board,
   Command,
@@ -20,7 +21,8 @@ import type {
 import { z } from 'zod';
 import { ulid, nowIso } from './ids.js';
 import { getDb } from './firestore.js';
-import { requireSource, hasScopeAtLeast } from './auth.js';
+import { requireSource, hasScopeAtLeast, getEffectiveScope } from './auth.js';
+import type { ApiTokenScope } from '@worktracker/types';
 import { InvalidInputError } from './errors.js';
 import { evaluateCommand as _evaluateCommand } from './brain.js';
 void _evaluateCommand; // reserved for the in-process evaluation path
@@ -46,6 +48,7 @@ export interface JsonRpcResponse {
 const TOOLS = [
   {
     name: 'worktracker_list_items',
+    required_scope: 'read',
     description:
       'List work items. Returns items, optionally filtered by kind/status/source/owner and a search query.',
     inputSchema: {
@@ -63,6 +66,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_get_item',
+    required_scope: 'read',
     description: 'Get one work item by id, including its event timeline.',
     inputSchema: {
       type: 'object',
@@ -72,6 +76,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_create_item',
+    required_scope: 'read_write',
     description: 'Create a new work item. Returns the new item id.',
     inputSchema: {
       type: 'object',
@@ -91,6 +96,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_update_item',
+    required_scope: 'read_write',
     description: 'Update fields on a work item. Requires expected_version for optimistic concurrency.',
     inputSchema: {
       type: 'object',
@@ -104,6 +110,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_transition',
+    required_scope: 'read_write',
     description: 'Transition a work item to a new status. Enqueues a `transition` command.',
     inputSchema: {
       type: 'object',
@@ -119,6 +126,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_comment',
+    required_scope: 'read_write',
     description: 'Add a comment event to a work item.',
     inputSchema: {
       type: 'object',
@@ -132,6 +140,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_link_items',
+    required_scope: 'read_write',
     description: 'Link two work items (parent -> child) with a kind.',
     inputSchema: {
       type: 'object',
@@ -148,6 +157,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_set_reminder',
+    required_scope: 'read_write',
     description: 'Attach a reminder to a work item (v0.5).',
     inputSchema: {
       type: 'object',
@@ -162,6 +172,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_enrich',
+    required_scope: 'read_write',
     description: 'Run Grill or Wayfind on a work item. v0 stretch.',
     inputSchema: {
       type: 'object',
@@ -175,6 +186,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_dispatch',
+    required_scope: 'read_write',
     description: 'High-level tool: pre-flight check + missing enrichment + status transition. Returns a job id.',
     inputSchema: {
       type: 'object',
@@ -194,11 +206,13 @@ const TOOLS = [
   },
   {
     name: 'worktracker_list_boards',
+    required_scope: 'read',
     description: 'List all kanban boards. Returns the full Board objects (name, columns, kind filter, default flag).',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'worktracker_get_board',
+    required_scope: 'read',
     description: 'Get one board by id, including its column definitions and kind filter.',
     inputSchema: {
       type: 'object',
@@ -208,6 +222,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_create_board',
+    required_scope: 'admin',
     description: 'Create a new board. Admin only. The board becomes available immediately to every user; pass is_default=true to make it the landing view.',
     inputSchema: {
       type: 'object',
@@ -236,6 +251,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_update_board',
+    required_scope: 'admin',
     description: 'Update an existing board. Admin only. Omit any field to keep its current value.',
     inputSchema: {
       type: 'object',
@@ -265,6 +281,7 @@ const TOOLS = [
   },
   {
     name: 'worktracker_delete_board',
+    required_scope: 'admin',
     description: 'Delete a board. Admin only. The default board cannot be deleted; set another board as default first.',
     inputSchema: {
       type: 'object',
@@ -524,6 +541,41 @@ redeploy to update this page.
 
 // ----- Router -----
 
+/**
+ * Look up the scope a tool requires. Falls back to `read` (most
+ * permissive) for tools not in the registry — this means a new
+ * tool that lands in the dispatch but not yet in TOOLS is visible
+ * to all callers by default. The opposite of "fail closed", but
+ * the right default for a development surface; flip to `'admin'`
+ * once you want explicit gating.
+ *
+ * The "no tool will fail" promise (architecture v1 §1) is preserved
+ * by the top-level filter in `tools/list`: callers only see tools
+ * they can run. The `tools/call` gate is defense in depth.
+ */
+function getRequiredScope(toolName: string): ApiTokenScope {
+  const tool = (TOOLS as ReadonlyArray<{ name: string; required_scope?: ApiTokenScope }>).find(
+    (t) => t.name === toolName,
+  );
+  return tool?.required_scope ?? 'read';
+}
+
+/**
+ * SCOPE_RANK — mirror of `auth.ts` to keep this module's scope
+ * checks self-contained. The auth middleware owns the same ranks;
+ * we duplicate here because `mcp.ts` filters tools in the request
+ * hot path and shouldn't pay a module-graph cost for the lookup.
+ */
+const SCOPE_RANK: Record<ApiTokenScope, number> = {
+  read: 1,
+  read_write: 2,
+  admin: 3,
+};
+
+function scopeAtLeast(have: ApiTokenScope, need: ApiTokenScope): boolean {
+  return SCOPE_RANK[have] >= SCOPE_RANK[need];
+}
+
 export async function mcpRoutes(app: FastifyInstance): Promise<void> {
   // MCP routes are registered at BOTH `/api/mcp` (so internal
   // callers behind the `/api/**` Firebase Hosting rewrite hit
@@ -574,6 +626,38 @@ export async function mcpRoutes(app: FastifyInstance): Promise<void> {
     const payload = Array.isArray(body) ? responses : responses[0];
     reply.send(payload);
   });
+
+  // -------------------------------------------------------------------
+  // Streamable HTTP — slice 1, the spec-aligned transport.
+  //
+  // The 2026-07-28 MCP spec promotes "Streamable HTTP" as the
+  // standard HTTP transport. The contract: same JSON-RPC 2.0
+  // envelope over POST, plus a session id header the client can
+  // echo on subsequent requests. v1 here does NOT yet push
+  // server-initiated events over SSE; the response is still
+  // a single JSON payload per call. The `Mcp-Session-Id` is
+  // generated on every request for compatibility with clients
+  // that expect it (Codex, OpenClaw).
+  //
+  // The handler is intentionally the same as `/mcp`. Adding the
+  // new transport does not change behavior; it adds a stable
+  // endpoint name for clients that prefer the spec-aligned one.
+  // -------------------------------------------------------------------
+  app.get('/mcp/stream', { preHandler: requireSource }, (_req, reply) => {
+    reply.code(405).send({ error: 'GET /mcp/stream not supported; POST JSON-RPC to /mcp/stream' });
+  });
+  app.post('/mcp/stream', { preHandler: requireSource }, async (req, reply) => {
+    const body = req.body as JsonRpcRequest | JsonRpcRequest[];
+    const requests = Array.isArray(body) ? body : [body];
+    const responses = await Promise.all(requests.map((r) => handleRpc(r, req)));
+    const payload = Array.isArray(body) ? responses : responses[0];
+    // 32 hex chars = 128 bits. Enough for a session marker; not a
+    // secret (the bearer is the real auth). Future slice 1.x adds
+    // session resumption — for now it's a per-request token.
+    const sessionId = randomBytes(16).toString('hex');
+    reply.header('Mcp-Session-Id', sessionId);
+    reply.send(payload);
+  });
 }
 
 async function handleRpc(req: JsonRpcRequest, httpReq: FastifyRequest): Promise<JsonRpcResponse> {
@@ -595,8 +679,18 @@ async function handleRpc(req: JsonRpcRequest, httpReq: FastifyRequest): Promise<
       case 'notifications/initialized':
         // Client-side notification; no response.
         return { jsonrpc: '2.0', id: req.id, result: {} };
-      case 'tools/list':
-        return { jsonrpc: '2.0', id: req.id, result: { tools: TOOLS } };
+      case 'tools/list': {
+        // Slice 1: filter the catalog by the bearer's effective
+        // scope. A `read` token sees 4 tools, `read_write` sees 12,
+        // `admin` sees all 15. The "no tool will fail" promise: a
+        // caller that can see a tool can run it (modulo the
+        // defense-in-depth check at `tools/call`).
+        const effective = getEffectiveScope(httpReq);
+        const tools = (TOOLS as ReadonlyArray<{ name: string; required_scope?: ApiTokenScope }>).filter(
+          (t) => scopeAtLeast(effective, t.required_scope ?? 'read'),
+        );
+        return { jsonrpc: '2.0', id: req.id, result: { tools } };
+      }
       case 'tools/call': {
         const params = (req.params ?? {}) as { name: string; arguments?: unknown };
         const args = (params.arguments ?? {}) as Record<string, unknown>;
@@ -657,6 +751,22 @@ export async function dispatchTool(
   args: Record<string, unknown>,
   httpReq: FastifyRequest,
 ): Promise<DispatchResult> {
+  // Slice 1: single scope gate at the top. The per-case checks
+  // below are kept as belt-and-braces; they should never fire
+  // because the catalog filter in `tools/list` already prevented
+  // the caller from seeing out-of-scope tools. If we do see one,
+  // surface it as -32603 with a clear debuggable message: the
+  // caller's tool list and the gate are out of sync (a bug).
+  const required = getRequiredScope(name);
+  if (!hasScopeAtLeast(httpReq, required)) {
+    const effective = getEffectiveScope(httpReq);
+    return {
+      ok: false,
+      error: `tool ${name} requires ${required} scope (effective: ${effective})`,
+      code: -32603,
+    };
+  }
+
   const source = httpReq.auth?.source?.name ?? 'web';
   const enqueue = async <Op extends Command['op']>(
     op: Op,
