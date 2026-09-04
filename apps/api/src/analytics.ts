@@ -83,7 +83,7 @@ export async function recordCallTrace(input: {
     outcome: input.outcome,
     expireAt: new Date(Date.now() + TTL_MS),
   };
-  await getDb().collection('analytics/call_traces').doc(id).set(doc);
+  await getDb().doc('analytics').collection('call_traces').doc(id).set(doc);
 }
 
 /**

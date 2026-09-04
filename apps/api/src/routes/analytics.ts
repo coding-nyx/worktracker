@@ -104,7 +104,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/analytics/call-traces', { preHandler: requireAdmin }, async (req) => {
     const q = ListQuery.parse(req.query);
     let ref = getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .orderBy('ts', 'desc')
       .limit(q.limit);
     if (q.outcome) ref = ref.where('outcome', '==', q.outcome) as never;
@@ -113,7 +113,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     if (q.bearer_id) ref = ref.where('bearer_id', '==', q.bearer_id) as never;
     if (q.cursor) {
       const cursorSnap = await getDb()
-        .collection('analytics/call_traces')
+        .doc('analytics').collection('call_traces')
         .doc(q.cursor)
         .get();
       if (cursorSnap.exists) ref = ref.startAfter(cursorSnap) as never;
@@ -135,7 +135,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     // a real Firestore deployment would use a counter doc, but
     // v0 stays in a single collection read.
     const allSnap = await getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .orderBy('ts', 'desc')
       .limit(500)
       .get();
@@ -163,7 +163,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     const windowMs = q.window === '24h' ? 24 * 3600_000 : q.window === '7d' ? 7 * 86_400_000 : 30 * 86_400_000;
     const cutoff = new Date(Date.now() - windowMs);
     const snap = await getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .where('ts', '>=', cutoff.toISOString())
       .orderBy('ts', 'desc')
       .limit(1000)
@@ -218,7 +218,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     const q = SeriesQuery.parse(req.query);
     const cutoff = new Date(Date.now() - q.days * 86_400_000);
     const snap = await getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .where('ts', '>=', cutoff.toISOString())
       .orderBy('ts', 'desc')
       .limit(2000)
@@ -253,7 +253,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
     const windowMs = q.window === '24h' ? 24 * 3600_000 : q.window === '7d' ? 7 * 86_400_000 : 30 * 86_400_000;
     const cutoff = new Date(Date.now() - windowMs);
     const snap = await getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .where('ts', '>=', cutoff.toISOString())
       .orderBy('ts', 'desc')
       .limit(2000)
@@ -295,7 +295,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
   // doesn't pull a million docs into memory.
   app.get('/api/analytics/call-traces.csv', { preHandler: requireAdmin }, async (req, reply) => {
     const q = CsvQuery.parse(req.query);
-    let ref = getDb().collection('analytics/call_traces').orderBy('ts', 'desc').limit(q.limit);
+    let ref = getDb().doc('analytics').collection('call_traces').orderBy('ts', 'desc').limit(q.limit);
     if (q.outcome) ref = ref.where('outcome', '==', q.outcome) as never;
     if (q.from) ref = ref.where('ts', '>=', q.from) as never;
     if (q.to) ref = ref.where('ts', '<=', q.to) as never;
@@ -327,7 +327,7 @@ export async function analyticsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/api/analytics/call-traces/summary', { preHandler: requireAdmin }, async () => {
     const snap = await getDb()
-      .collection('analytics/call_traces')
+      .doc('analytics').collection('call_traces')
       .orderBy('ts', 'desc')
       .limit(500)
       .get();
