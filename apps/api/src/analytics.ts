@@ -83,7 +83,13 @@ export async function recordCallTrace(input: {
     outcome: input.outcome,
     expireAt: new Date(Date.now() + TTL_MS),
   };
-  await getDb().doc('analytics').collection('call_traces').doc(id).set(doc);
+  // Flat collection: traces live at `analytics/{id}` (not
+  // `analytics/call_traces/{id}`). The old subcollection shape
+  // required `db.collection('a/b')` which the firebase-admin 12.x
+  // SDK rejects (2-component path = a doc, not a collection).
+  // // The doc id is ULID; `agent` and `tool` are top-level
+  // fields so list queries can filter without a collectionGroup.
+  await getDb().collection('analytics').doc(id).set(doc);
 }
 
 /**
