@@ -170,6 +170,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   await commandsAdminRoutes(app);
   const { boardsRoutes } = await import('./routes/boards.js');
   await boardsRoutes(app);
+  // Slice 10: project / release / tag taxonomy. Registered
+  // before auth because they're the new structural primitives;
+  // the admin pages reach in via requireAdmin for writes.
+  const { projectsRoutes } = await import('./routes/projects.js');
+  await projectsRoutes(app);
+  const { releasesRoutes } = await import('./routes/releases.js');
+  await releasesRoutes(app);
+  const { tagsRoutes } = await import('./routes/tags.js');
+  await tagsRoutes(app);
   const { authRoutes } = await import('./routes/auth.js');
   await authRoutes(app);
   const { adminUsersRoutes } = await import('./routes/admin-users.js');

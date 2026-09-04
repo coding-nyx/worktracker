@@ -21,6 +21,9 @@ import type {
   ClientKind,
   ClientManifest,
   Command,
+  CreateProjectRequest,
+  CreateReleaseRequest,
+  CreateTagRequest,
   CommandFailuresResponse,
   Connector,
   ConnectorKind,
@@ -32,11 +35,17 @@ import type {
   ListClientsResponse,
   ListConnectorsResponse,
   ListItemsResponse,
+  ListProjectsResponse,
+  ListReleasesResponse,
+  ListTagsResponse,
   TransitionRequest,
   UpdateBoardRequest,
   WorkItem,
   WorkItemEvent,
   WorktrackerUser,
+  Project,
+  Release,
+  TagTaxonomy,
 } from '@worktracker/types';
 import { getFirebaseAuth } from './firebase';
 
@@ -212,6 +221,54 @@ export const api = {
     request<{ board: Board }>('PATCH', `/api/boards/${id}`, body),
   deleteBoard: (id: string) =>
     request<{ id: string; deleted: boolean }>('DELETE', `/api/boards/${id}`),
+
+  // ---- Slice 10: Project / Release / Tag taxonomy ----
+  // Projects are the top-level container. Releases live inside
+  // a project. Tags are a managed label set; work items reference
+  // them by slug. The list endpoints are read-only for any
+  // authenticated source; the write endpoints are admin-only on
+  // the server side.
+  listProjects: (q: { include_archived?: boolean } = {}) =>
+    request<ListProjectsResponse>(
+      'GET',
+      `/api/projects?include_archived=${q.include_archived ? 'true' : 'false'}`,
+    ),
+  getProject: (id: string) =>
+    request<{ project: Project }>('GET', `/api/projects/${encodeURIComponent(id)}`),
+  createProject: (body: CreateProjectRequest) =>
+    request<{ project: Project }>('POST', '/api/projects', body),
+  // Update is the same shape as create minus the slug (slug is
+  // immutable post-create; rename = create new project + migrate).
+  updateProject: (id: string, body: Partial<Omit<CreateProjectRequest, 'slug'>> & { archived?: boolean }) =>
+    request<{ project: Project }>('PATCH', `/api/projects/${encodeURIComponent(id)}`, body),
+  deleteProject: (id: string) =>
+    request<{ id: string; archived: boolean }>('DELETE', `/api/projects/${encodeURIComponent(id)}`),
+
+  listReleases: (q: { project_id?: string; status?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (q.project_id) params.set('project_id', q.project_id);
+    if (q.status) params.set('status', q.status);
+    const qs = params.toString();
+    return request<ListReleasesResponse>('GET', `/api/releases${qs ? `?${qs}` : ''}`);
+  },
+  getRelease: (id: string) =>
+    request<{ release: Release }>('GET', `/api/releases/${encodeURIComponent(id)}`),
+  createRelease: (body: CreateReleaseRequest) =>
+    request<{ release: Release }>('POST', '/api/releases', body),
+  updateRelease: (id: string, body: Partial<Omit<CreateReleaseRequest, 'project_id'>>) =>
+    request<{ release: Release }>('PATCH', `/api/releases/${encodeURIComponent(id)}`, body),
+  deleteRelease: (id: string) =>
+    request<{ id: string; archived: boolean }>('DELETE', `/api/releases/${encodeURIComponent(id)}`),
+
+  listTags: () => request<ListTagsResponse>('GET', '/api/tags'),
+  getTag: (slug: string) =>
+    request<{ tag: TagTaxonomy }>('GET', `/api/tags/${encodeURIComponent(slug)}`),
+  createTag: (body: CreateTagRequest) =>
+    request<{ tag: TagTaxonomy }>('POST', '/api/tags', body),
+  updateTag: (slug: string, body: Partial<Omit<CreateTagRequest, 'slug'>>) =>
+    request<{ tag: TagTaxonomy }>('PATCH', `/api/tags/${encodeURIComponent(slug)}`, body),
+  deleteTag: (slug: string) =>
+    request<{ slug: string; deleted: boolean }>('DELETE', `/api/tags/${encodeURIComponent(slug)}`),
 
   // Dead-letter admin surface.
   listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {

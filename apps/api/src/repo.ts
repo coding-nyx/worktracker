@@ -105,6 +105,10 @@ export async function applyCommand(ctx: ApplyContext): Promise<ApplyResult | nul
       archived_at: null,
       // Slice 3 — rich data + board association.
       board_id: command.payload.board_id ?? null,
+      // Slice 10 — project / release / tag taxonomy.
+      project_id: command.payload.project_id ?? null,
+      release_id: command.payload.release_id ?? null,
+      tag_slugs: command.payload.tag_slugs ?? [],
       data: validatedData,
       data_map: command.payload.data_map ?? {},
       plan_file_id: null,

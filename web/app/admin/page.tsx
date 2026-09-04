@@ -183,6 +183,48 @@ export default function AdminPage() {
         }
       />
 
+      <Section
+        title="Projects"
+        eyebrow="structure"
+        description="Top-level containers. A project owns Releases; items reference a project so the kanban can filter by it."
+        action={
+          <a
+            href="/admin/projects"
+            className="btn-secondary focus-ring"
+          >
+            Manage projects →
+          </a>
+        }
+      />
+
+      <Section
+        title="Releases"
+        eyebrow="structure"
+        description="Versioned batches inside a project. Items can target a release so the kanban can show 'what's in v2.4'."
+        action={
+          <a
+            href="/admin/releases"
+            className="btn-secondary focus-ring"
+          >
+            Manage releases →
+          </a>
+        }
+      />
+
+      <Section
+        title="Tags"
+        eyebrow="structure"
+        description="Managed label set. Items reference tags by slug; this table is the source of truth for label and color."
+        action={
+          <a
+            href="/admin/tags"
+            className="btn-secondary focus-ring"
+          >
+            Manage tags →
+          </a>
+        }
+      />
+
       <DeadLetterPanel />
 
       <Modal open={showManifest} onClose={() => setShowManifest(false)} title="Client manifest reference" size="lg">

@@ -195,6 +195,156 @@ export interface FileRecord {
 }
 
 // =====================================================================
+// Slice 10 — Project, Release, Tag taxonomy
+// =====================================================================
+//
+// Before slice 10, WorkItems had `board_id` (a saved kanban view)
+// and `tags?: string[]` (free-form). That worked for a single
+// team with one board but couldn't model the real-world
+// hierarchy: a project spans many boards, a release groups
+// many work items across kinds, and tags need a managed
+// taxonomy (so two teams can use the same label without
+// inventing two synonyms).
+//
+// The new shape:
+//   - Project  — top-level container; owns Releases, has a
+//                color + name, can be archived.
+//   - Release  — versioned batch inside a Project; items can
+//                optionally target a Release (so the kanban
+//                can filter "what's in v2.4").
+//   - Tag      — managed label with a slug, label, color,
+//                description. Items reference slugs; the
+//                admin UI renders the label + color from
+//                the taxonomy.
+//
+// Legacy `tags?: string[]` on `data` (per-kind) is still
+// accepted for read-back; new items use the `tag_slugs`
+// field on the top-level WorkItem. Old items keep their
+// free-form tags visible as "legacy" in the UI.
+
+// ----- Project -----
+
+export const PROJECT_COLORS = [
+  'cyan',
+  'magenta',
+  'amber',
+  'emerald',
+  'violet',
+  'rose',
+  'slate',
+] as const;
+export type ProjectColor = (typeof PROJECT_COLORS)[number];
+
+export interface Project {
+  id: string; // ULID
+  /** Short URL-safe slug, used in path-style lookups. Lowercase. */
+  slug: string;
+  name: string;
+  description: string | null;
+  color: ProjectColor;
+  owner: string | null;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateProjectRequest {
+  slug: string;
+  name: string;
+  description?: string | null;
+  color?: ProjectColor;
+  owner?: string | null;
+}
+
+export interface UpdateProjectRequest {
+  name?: string;
+  description?: string | null;
+  color?: ProjectColor;
+  owner?: string | null;
+  archived?: boolean;
+}
+
+export interface ListProjectsResponse {
+  projects: Project[];
+}
+
+// ----- Release -----
+
+export const RELEASE_STATUSES = [
+  'planned',
+  'in_progress',
+  'shipped',
+  'archived',
+] as const;
+export type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
+
+export interface Release {
+  id: string; // ULID
+  project_id: string;
+  /** Semver-ish version label. Free-form (e.g. "v2.4", "2024.10"). */
+  version: string;
+  status: ReleaseStatus;
+  /** When the release was/will be shipped. ISO 8601, may be future. */
+  release_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateReleaseRequest {
+  project_id: string;
+  version: string;
+  status?: ReleaseStatus;
+  release_at?: string | null;
+  notes?: string | null;
+}
+
+export interface UpdateReleaseRequest {
+  version?: string;
+  status?: ReleaseStatus;
+  release_at?: string | null;
+  notes?: string | null;
+}
+
+export interface ListReleasesResponse {
+  releases: Release[];
+}
+
+// ----- Tag taxonomy -----
+
+/**
+ * A managed label. Stored at `tag_taxonomy/{slug}` so the slug
+ * is the doc id (lookups are O(1), and the slug is what
+ * WorkItems reference in their `tag_slugs` array).
+ */
+export interface TagTaxonomy {
+  /** Slug is the doc id. URL-safe, lowercase. */
+  slug: string;
+  label: string;
+  color: ProjectColor;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTagRequest {
+  slug: string;
+  label: string;
+  color?: ProjectColor;
+  description?: string | null;
+}
+
+export interface UpdateTagRequest {
+  label?: string;
+  color?: ProjectColor;
+  description?: string | null;
+}
+
+export interface ListTagsResponse {
+  tags: TagTaxonomy[];
+}
+
+// =====================================================================
 // Work item document
 // =====================================================================
 
@@ -223,6 +373,14 @@ export interface WorkItem {
    * are owned by a specific board (or the un-boarded backlog).
    */
   board_id: string | null;
+  // Slice 10 — Project, Release, Tag taxonomy
+  /** Top-level project this item belongs to. Optional but recommended. */
+  project_id: string | null;
+  /** Optional release target. Must reference a Release whose
+   *  project_id matches the item's project_id. */
+  release_id: string | null;
+  /** Managed tag slugs (resolved to label+color at read time). */
+  tag_slugs: string[];
   /** Strict per-kind typed payload. Validated on every write. */
   data: Record<string, unknown>;
   /** Free-form scalar key/value map. Filter / sort key bag. */
@@ -537,6 +695,13 @@ export interface CreateCommandPayload {
   group_id?: string;
   /** Slice 3 — which board this item belongs to. Omit for Backlog. */
   board_id?: string | null;
+  /** Slice 10 — top-level project. */
+  project_id?: string | null;
+  /** Slice 10 — release target. Must reference a Release whose
+   *  project_id matches `project_id`. */
+  release_id?: string | null;
+  /** Slice 10 — managed tag slugs (resolved via tag_taxonomy). */
+  tag_slugs?: string[];
   /** Slice 3 — per-kind typed payload. Validated against the kind's
    *  Zod schema (`apps/api/src/data-schemas.ts`) on every write. */
   data?: Record<string, unknown>;
@@ -559,6 +724,9 @@ export interface UpdateCommandPayload {
       | 'enricher'
       | 'source_meta'
       | 'board_id'
+      | 'project_id'
+      | 'release_id'
+      | 'tag_slugs'
       | 'data'
       | 'data_map'
       | 'plan_file_id'
