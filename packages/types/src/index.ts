@@ -194,6 +194,14 @@ export interface FileRecord {
   content_sha256?: string;
 }
 
+/** Returned by GET /api/files. The body bytes are stripped so the
+ *  list view can render name + size without pulling 10 MB per row. */
+export type FileMeta = Omit<FileRecord, 'content_b64'>;
+
+export interface ListFilesResponse {
+  files: FileMeta[];
+}
+
 // =====================================================================
 // Slice 10 — Project, Release, Tag taxonomy
 // =====================================================================

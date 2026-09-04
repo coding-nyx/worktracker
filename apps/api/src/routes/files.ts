@@ -40,6 +40,15 @@ const FILE_BODY_LIMIT = 2 * 1024 * 1024;
 
 const FileId = z.string().min(1).max(64);
 
+const ListQuery = z.object({
+  /** Restrict to files attached to a specific work item. */
+  item_id: z.string().min(1).max(64).optional(),
+  /** Filter by mime prefix, e.g. "image/" or "application/pdf". */
+  mime_prefix: z.string().min(1).max(64).optional(),
+  /** Cap on returned docs; defaults to 100, max 500. */
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
 const UploadSchema = z.object({
   name: z.string().min(1).max(200),
   content_type: z.string().min(1).max(200),
@@ -50,6 +59,34 @@ const UploadSchema = z.object({
 });
 
 export async function filesRoutes(app: FastifyInstance): Promise<void> {
+  // Slice 11: list files (no body bytes — just metadata). The
+  // bytes endpoint is /api/files/:id for the actual download.
+  // The list can be filtered by item_id (e.g. "show me what
+  // attaches to <work item>") and by mime prefix (e.g. "show
+  // me only images"). Returns a list of FileRecord minus the
+  // content_b64 field so the list view can render name + size
+  // without pulling 10 MB per row.
+  app.get('/api/files', { preHandler: requireSource }, async (req) => {
+    const q = ListQuery.parse(req.query);
+    let ref = getDb()
+      .collection('files')
+      .orderBy('uploaded_at', 'desc')
+      .limit(q.limit);
+    if (q.item_id) ref = ref.where('owner_item_id', '==', q.item_id) as never;
+    const snap = await ref.get();
+    let files = snap.docs.map((d) => d.data() as FileRecord);
+    if (q.mime_prefix) {
+      const prefix = q.mime_prefix.toLowerCase();
+      files = files.filter((f) => f.content_type.toLowerCase().startsWith(prefix));
+    }
+    // Strip the body bytes from the list response.
+    const list = files.map(({ content_b64: _b, ...rest }) => {
+      void _b;
+      return rest;
+    });
+    return { files: list };
+  });
+
   app.post(
     '/api/files',
     {

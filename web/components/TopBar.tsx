@@ -9,6 +9,7 @@ import { useChatUi } from '../app/providers';
 
 const NAV = [
   { href: '/',           label: 'Kanban' },
+  { href: '/files',      label: 'Files' },
   { href: '/clients',    label: 'Clients' },
   { href: '/connectors', label: 'Connectors' },
   { href: '/admin',      label: 'Admin' },

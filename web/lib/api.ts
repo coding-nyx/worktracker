@@ -38,6 +38,7 @@ import type {
   ListProjectsResponse,
   ListReleasesResponse,
   ListTagsResponse,
+  ListFilesResponse,
   TransitionRequest,
   UpdateBoardRequest,
   WorkItem,
@@ -275,6 +276,37 @@ export const api = {
     request<{ tag: TagTaxonomy }>('PATCH', `/api/tags/${encodeURIComponent(slug)}`, body),
   deleteTag: (slug: string) =>
     request<{ slug: string; deleted: boolean }>('DELETE', `/api/tags/${encodeURIComponent(slug)}`),
+
+  // ---- Files (slice 11) ----
+  // Body bytes are returned by /api/files/:id, not the list. The
+  // list view renders name + size + mime; clicking a row opens
+  // a download URL.
+  listFiles: (q: { item_id?: string; mime_prefix?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.item_id) params.set('item_id', q.item_id);
+    if (q.mime_prefix) params.set('mime_prefix', q.mime_prefix);
+    if (q.limit) params.set('limit', String(q.limit));
+    const qs = params.toString();
+    return request<ListFilesResponse>('GET', `/api/files${qs ? `?${qs}` : ''}`);
+  },
+  getFileMeta: (id: string) =>
+    request<{ file: { file_id: string; name: string; content_type: string; size_bytes: number; owner_item_id: string | null; uploaded_by: string; uploaded_at: string; content_sha256?: string } }>(
+      'GET',
+      `/api/files/${encodeURIComponent(id)}/meta`,
+    ),
+  fileDownloadUrl: (id: string) => `/api/files/${encodeURIComponent(id)}`,
+  deleteFile: (id: string) =>
+    request<{ deleted: boolean; item_ids: string[] }>('DELETE', `/api/files/${encodeURIComponent(id)}`),
+  uploadFileRaw: (body: {
+    name: string;
+    content_type: string;
+    content_b64: string;
+    item_id?: string;
+  }) => request<{ file_id: string; file: { file_id: string; name: string; content_type: string; size_bytes: number; owner_item_id: string | null; uploaded_at: string; content_sha256?: string } }>(
+      'POST',
+      '/api/files',
+      body,
+    ),
 
   // Dead-letter admin surface.
   listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {
