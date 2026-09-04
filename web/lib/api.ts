@@ -308,6 +308,65 @@ export const api = {
       body,
     ),
 
+  // ---- Slice 12: analytics depth ----
+  // Summary rollup over a time window (24h / 7d / 30d). The
+  // window is enforced server-side via Firestore `ts >= cutoff`.
+  analyticsSummary: (q: { window?: '24h' | '7d' | '30d' } = {}) => {
+    const params = new URLSearchParams();
+    if (q.window) params.set('window', q.window);
+    const qs = params.toString();
+    return request<{
+      window: '24h' | '7d' | '30d';
+      total: number;
+      success: number;
+      success_rate: number;
+      p50_latency_ms: number;
+      p95_latency_ms: number;
+      outcomes: {
+        success: number;
+        auth_failed: number;
+        server_error: number;
+        client_error: number;
+        unreachable: number;
+      };
+      by_agent: { agent: string; total: number; success: number }[];
+    }>('GET', `/api/analytics/summary${qs ? `?${qs}` : ''}`);
+  },
+  // Per-day time series. The server pre-fills zero days so the
+  // chart always has a full window.
+  analyticsSeries: (q: { days?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.days) params.set('days', String(q.days));
+    const qs = params.toString();
+    return request<{ days: number; points: { date: string; total: number; success: number; error: number }[] }>(
+      'GET',
+      `/api/analytics/series${qs ? `?${qs}` : ''}`,
+    );
+  },
+  // Per-agent drilldown: same data as summary.by_agent, but at
+  // a top level so the page can show it independently.
+  analyticsAgents: (q: { window?: '24h' | '7d' | '30d' } = {}) => {
+    const params = new URLSearchParams();
+    if (q.window) params.set('window', q.window);
+    const qs = params.toString();
+    return request<{ window: string; agents: { agent: string; total: number; success: number; error: number; p95_latency_ms: number }[] }>(
+      'GET',
+      `/api/analytics/agents${qs ? `?${qs}` : ''}`,
+    );
+  },
+  // CSV export: returns the URL for the admin bearer-auth'd
+  // download. The browser will hit /api/analytics/call-traces.csv
+  // and the server streams text/csv.
+  analyticsCsvUrl: (q: { from?: string; to?: string; outcome?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (q.from) params.set('from', q.from);
+    if (q.to) params.set('to', q.to);
+    if (q.outcome) params.set('outcome', q.outcome);
+    if (q.limit) params.set('limit', String(q.limit));
+    const qs = params.toString();
+    return `/api/analytics/call-traces.csv${qs ? `?${qs}` : ''}`;
+  },
+
   // Dead-letter admin surface.
   listCommands: (q: { status?: 'queued' | 'evaluating' | 'applied' | 'rejected' | 'failed'; limit?: number } = {}) => {
     const params = new URLSearchParams();
