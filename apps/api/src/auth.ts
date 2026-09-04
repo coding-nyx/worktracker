@@ -304,7 +304,13 @@ async function resolveSourceFromToken(token: string): Promise<Client | null> {
 function touchLastUsed(ref: DocumentReference): void {
   void ref
     .set({ last_used_at: nowIso(), updated_at: nowIso() }, { merge: true })
-    .catch(() => undefined);
+    .catch((err: unknown) => {
+      // Slice 8: previously swallowed silently. With the agent
+      // path now also touching, a dropped write leaves the
+      // admin's "last used" column stuck on "never" and is
+      // hard to diagnose. Log once so the operator can see it.
+      console.error('[auth] touchLastUsed failed for', ref.path, err);
+    });
 }
 
 const SCRYPT_KEYLEN = 64;
