@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkItem, WorkItemKind } from '@worktracker/types';
 import { api } from '../lib/api';
 import { Modal } from './Modal';
@@ -29,7 +29,35 @@ export function NewItemModal({
   const [priority, setPriority] = useState<string>('');
   const [owner, setOwner] = useState('');
   const [due, setDue] = useState(''); // YYYY-MM-DD
+  // Slice 10: project / release / tag taxonomy. The release
+  // dropdown is filtered to the selected project so the operator
+  // can't accidentally point a release from project A at an
+  // item in project B.
+  const [projectId, setProjectId] = useState<string>('');
+  const [releaseId, setReleaseId] = useState<string>('');
+  const [tagSlugs, setTagSlugs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Lazy-load the structural primitives. The pickers fall
+  // back to "(none)" if the lists are empty.
+  const { data: projectsData } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.listProjects(),
+    enabled: open,
+  });
+  const projects = projectsData?.projects ?? [];
+  const { data: tagsData } = useQuery({
+    queryKey: ['tags'],
+    queryFn: () => api.listTags(),
+    enabled: open,
+  });
+  const tags = tagsData?.tags ?? [];
+  const { data: releasesData } = useQuery({
+    queryKey: ['releases', projectId],
+    queryFn: () => api.listReleases(projectId ? { project_id: projectId } : {}),
+    enabled: open && !!projectId,
+  });
+  const releases = releasesData?.releases ?? [];
 
   const create = useMutation({
     mutationFn: () =>
@@ -41,6 +69,9 @@ export function NewItemModal({
         priority: (priority || undefined) as WorkItem['priority'],
         owner: owner.trim() || undefined,
         due_at: due ? new Date(`${due}T17:00:00Z`).toISOString() : undefined,
+        project_id: projectId || undefined,
+        release_id: releaseId || undefined,
+        tag_slugs: tagSlugs.length > 0 ? tagSlugs : undefined,
       }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['items'] });
@@ -61,7 +92,16 @@ export function NewItemModal({
     setPriority('');
     setOwner('');
     setDue('');
+    setProjectId('');
+    setReleaseId('');
+    setTagSlugs([]);
     setError(null);
+  }
+
+  function toggleTag(slug: string) {
+    setTagSlugs((prev) =>
+      prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug],
+    );
   }
 
   function onSubmit(e: FormEvent) {
@@ -151,6 +191,72 @@ export function NewItemModal({
           </Field>
         </div>
 
+        {/* Slice 10 — project / release / tag pickers. The release
+            dropdown is filtered to the selected project so a release
+            from project A can't be assigned to an item in project B. */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Project">
+            <select
+              value={projectId}
+              onChange={(e) => {
+                setProjectId(e.target.value);
+                setReleaseId(''); // clear stale release
+              }}
+              className="field w-full text-[14px]"
+              disabled={create.isPending}
+            >
+              <option value="">none</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Release" hint={!projectId ? 'Pick a project first' : undefined}>
+            <select
+              value={releaseId}
+              onChange={(e) => setReleaseId(e.target.value)}
+              className="field w-full text-[14px]"
+              disabled={create.isPending || !projectId}
+            >
+              <option value="">none</option>
+              {releases.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.version} {r.status === 'shipped' ? '(shipped)' : r.status === 'archived' ? '(archived)' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        {tags.length > 0 ? (
+          <Field label="Tags" hint="Click to toggle. Managed in /admin/tags.">
+            <div className="flex flex-wrap gap-1.5">
+              {tags.map((t) => {
+                const on = tagSlugs.includes(t.slug);
+                return (
+                  <button
+                    key={t.slug}
+                    type="button"
+                    onClick={() => toggleTag(t.slug)}
+                    disabled={create.isPending}
+                    className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11.5px] transition-colors disabled:opacity-50 ${
+                      on
+                        ? 'border-brand-500/60 bg-brand-500/10 text-ink-1'
+                        : 'border-border-subtle bg-bg-sunken/40 text-ink-2 hover:bg-bg-sunken/70'
+                    }`}
+                  >
+                    <span
+                      aria-hidden
+                      className={`inline-block h-1.5 w-1.5 rounded-full bg-status-${t.color}-500`}
+                    />
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Field>
+        ) : null}
+
         <Field label="Body">
           <textarea
             value={body}
@@ -203,13 +309,14 @@ export function NewItemModal({
   );
 }
 
-function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
+function Field({ label, children, required, hint }: { label: string; children: React.ReactNode; required?: boolean; hint?: string }) {
   return (
     <div className="space-y-1.5">
       <label className="block text-[11.5px] font-medium uppercase tracking-wider text-ink-3">
         {label}{required ? <span className="text-status-blocked-500"> *</span> : null}
       </label>
       {children}
+      {hint ? <p className="text-[11px] text-ink-4">{hint}</p> : null}
     </div>
   );
 }

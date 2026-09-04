@@ -18,6 +18,9 @@ const NAV = [
 const ADMIN_NAV: { href: string; label: string }[] = [
   { href: '/admin/users', label: 'Users' },
   { href: '/admin/boards', label: 'Boards' },
+  { href: '/admin/projects', label: 'Projects' },
+  { href: '/admin/releases', label: 'Releases' },
+  { href: '/admin/tags', label: 'Tags' },
 ];
 
 export function TopBar() {

@@ -150,6 +150,12 @@ export const api = {
     priority?: WorkItem['priority'];
     owner?: string;
     due_at?: string;
+    // Slice 10: structural primitive assignment. All optional
+    // so the existing call sites keep working without changes.
+    board_id?: string | null;
+    project_id?: string | null;
+    release_id?: string | null;
+    tag_slugs?: string[];
   }) => request<{ command_id: string; status: 'queued' }>('POST', '/api/items', body),
   transition: (id: string, body: TransitionRequest) =>
     request<{ command_id: string; status: 'queued' }>('POST', `/api/items/${id}/transition`, body),

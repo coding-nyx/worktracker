@@ -54,6 +54,11 @@ export default function HomePage() {
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  // Slice 10: structural filters. Client-side, since the full
+  // item set is already in memory after the live subscription.
+  const [projectFilter, setProjectFilter] = useState<string>('');
+  const [releaseFilter, setReleaseFilter] = useState<string>('');
+  const [tagFilter, setTagFilter] = useState<string>('');
   const [showNewItem, setShowNewItem] = useState(false);
   const [itemDetailsId, setItemDetailsId] = useState<string | null>(null);
   // Slice 3 — the kanban is either a board view (items with
@@ -95,6 +100,29 @@ export default function HomePage() {
     queryFn: () => api.listBoards(),
   });
   const boards = boardsData?.boards ?? [];
+
+  // Slice 10 — structural primitives used by the kanban filter.
+  // The list is small (≤ a few hundred tags/projects in v0) so
+  // loading them all is cheap; if it ever becomes a bottleneck
+  // we move to a server-side search endpoint.
+  const { data: projectsData } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.listProjects(),
+  });
+  const projects = projectsData?.projects ?? [];
+  const { data: tagsData } = useQuery({
+    queryKey: ['tags'],
+    queryFn: () => api.listTags(),
+  });
+  const tags = tagsData?.tags ?? [];
+  // Releases for the active project. Empty when no project
+  // filter is set (the operator should pick a project first).
+  const { data: releasesData } = useQuery({
+    queryKey: ['releases', projectFilter],
+    queryFn: () => api.listReleases(projectFilter ? { project_id: projectFilter } : {}),
+    enabled: !!projectFilter,
+  });
+  const releases = releasesData?.releases ?? [];
 
   const activeBoard: Board | null = useMemo(() => {
     if (boards.length === 0) return null;
@@ -144,6 +172,17 @@ export default function HomePage() {
     } else {
       const set = new Set<WorkItemKind>(boardKinds);
       base = scoped.filter((i) => set.has(i.kind) && !i.archived_at);
+    }
+    // Slice 10 — client-side project / release / tag filter.
+    // The full item set is already in memory; this is cheap.
+    if (projectFilter) {
+      base = base.filter((i) => i.project_id === projectFilter);
+    }
+    if (releaseFilter) {
+      base = base.filter((i) => i.release_id === releaseFilter);
+    }
+    if (tagFilter) {
+      base = base.filter((i) => i.tag_slugs.includes(tagFilter));
     }
     const q = searchQuery.trim().toLowerCase();
     if (!q) return base;
@@ -230,6 +269,15 @@ export default function HomePage() {
         sourceFilter={sourceFilter}
         onSourceFilterChange={setSourceFilter}
         sources={sources}
+        projects={projects}
+        projectFilter={projectFilter}
+        onProjectFilterChange={setProjectFilter}
+        releases={releases}
+        releaseFilter={releaseFilter}
+        onReleaseFilterChange={setReleaseFilter}
+        tags={tags}
+        tagFilter={tagFilter}
+        onTagFilterChange={setTagFilter}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
         onNewItem={() => setShowNewItem(true)}
@@ -331,6 +379,15 @@ function PageHeader({
   sourceFilter,
   onSourceFilterChange,
   sources,
+  projects,
+  projectFilter,
+  onProjectFilterChange,
+  releases,
+  releaseFilter,
+  onReleaseFilterChange,
+  tags,
+  tagFilter,
+  onTagFilterChange,
   searchQuery,
   onSearchQueryChange,
   onNewItem,
@@ -350,6 +407,15 @@ function PageHeader({
   sourceFilter: string;
   onSourceFilterChange: (s: string) => void;
   sources: { name: string; display_name: string }[];
+  projects: { id: string; name: string; color: string }[];
+  projectFilter: string;
+  onProjectFilterChange: (id: string) => void;
+  releases: { id: string; version: string; status: string }[];
+  releaseFilter: string;
+  onReleaseFilterChange: (id: string) => void;
+  tags: { slug: string; label: string; color: string }[];
+  tagFilter: string;
+  onTagFilterChange: (slug: string) => void;
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   onNewItem: () => void;
@@ -393,6 +459,23 @@ function PageHeader({
             disabled={viewMode === 'backlog'}
           />
           <SourceFilter value={sourceFilter} onChange={onSourceFilterChange} sources={sources} />
+          {projects.length > 0 ? (
+            <ProjectFilter
+              projects={projects}
+              value={projectFilter}
+              onChange={onProjectFilterChange}
+            />
+          ) : null}
+          {projectFilter && releases.length > 0 ? (
+            <ReleaseFilter
+              releases={releases}
+              value={releaseFilter}
+              onChange={onReleaseFilterChange}
+            />
+          ) : null}
+          {tags.length > 0 ? (
+            <TagFilter tags={tags} value={tagFilter} onChange={onTagFilterChange} />
+          ) : null}
           <button
             type="button"
             onClick={onNewItem}
@@ -588,6 +671,100 @@ function SourceFilter({
         {sources.map((s) => (
           <option key={s.name} value={s.name}>
             {s.display_name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// Slice 10: structural filters. Each is a select that
+// appends to a chain: project → release → tag. Selecting
+// "all" for project clears the release (the page does
+// this via onChange; the dropdown is just the UI).
+function ProjectFilter({
+  projects,
+  value,
+  onChange,
+}: {
+  projects: { id: string; name: string; color: string }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="sr-only" htmlFor="project-filter">Project</label>
+      <select
+        id="project-filter"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="field pr-8 text-[13px]"
+        title="Filter by project"
+      >
+        <option value="">All projects</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function ReleaseFilter({
+  releases,
+  value,
+  onChange,
+}: {
+  releases: { id: string; version: string; status: string }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="sr-only" htmlFor="release-filter">Release</label>
+      <select
+        id="release-filter"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="field pr-8 text-[13px]"
+        title="Filter by release"
+      >
+        <option value="">All releases</option>
+        {releases.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.version} {r.status === 'shipped' ? '(shipped)' : r.status === 'archived' ? '(archived)' : ''}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function TagFilter({
+  tags,
+  value,
+  onChange,
+}: {
+  tags: { slug: string; label: string; color: string }[];
+  value: string;
+  onChange: (slug: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="sr-only" htmlFor="tag-filter">Tag</label>
+      <select
+        id="tag-filter"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="field pr-8 text-[13px]"
+        title="Filter by tag"
+      >
+        <option value="">All tags</option>
+        {tags.map((t) => (
+          <option key={t.slug} value={t.slug}>
+            {t.label}
           </option>
         ))}
       </select>
