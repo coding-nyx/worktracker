@@ -26,6 +26,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ApiTokenScope, Client, WorktrackerUser } from '@worktracker/types';
 import { applicationDefault, getApp, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
+import type { DocumentReference } from 'firebase-admin/firestore';
 import { getDb } from './firestore.js';
 import { ForbiddenError, UnauthorizedError } from './errors.js';
 import { loadConfig } from './config.js';
@@ -273,6 +274,7 @@ async function resolveSourceFromToken(token: string): Promise<Client | null> {
     if (!doc.exists) return null;
     const data = doc.data() as Client;
     if (data.api_key_hash && (await verifyApiKey(plaintext, data.api_key_hash))) {
+      touchLastUsed(doc.ref);
       return data;
     }
   }
@@ -282,10 +284,27 @@ async function resolveSourceFromToken(token: string): Promise<Client | null> {
   for (const doc of snap.docs) {
     const data = doc.data() as Client;
     if (data.api_key_hash && (await verifyApiKey(token, data.api_key_hash))) {
+      touchLastUsed(doc.ref);
       return data;
     }
   }
   return null;
+}
+
+/**
+ * Best-effort write of `last_used_at` to the source doc. Mirrors
+ * the same one-liner at the bottom of `resolveApiTokenFromId` so
+ * the agents (Hermes, Claude, Codex) get the same staleness
+ * signal the personal access tokens do.
+ *
+ * Fire-and-forget: the read already succeeded, so a failed
+ * touch is fine. The admin UI's `last used` column is a hint,
+ * not a contract.
+ */
+function touchLastUsed(ref: DocumentReference): void {
+  void ref
+    .set({ last_used_at: nowIso(), updated_at: nowIso() }, { merge: true })
+    .catch(() => undefined);
 }
 
 const SCRYPT_KEYLEN = 64;
@@ -437,7 +456,7 @@ async function resolveApiTokenFromId(
   // Best-effort last-used touch. Don't await; a failed touch
   // shouldn't block auth, and the read-after-write is fine
   // because the read already succeeded.
-  void ref.set({ last_used_at: nowIso() }, { merge: true }).catch(() => undefined);
+  touchLastUsed(ref);
   return { source: data, scope: data.scope, owner_uid: data.owner_uid ?? '' };
 }
 

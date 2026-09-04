@@ -154,12 +154,17 @@ function Section({
 function ClientCard({ client: c }: { client: Client }) {
   const qc = useQueryClient();
   const [patchError, setPatchError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   const toggle = useMutation({
     mutationFn: (enabled: boolean) => api.patchClient(c.name, { enabled }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['clients'] }),
     onError: (err) => setPatchError((err as Error).message),
   });
+
+  const isUser = c.kind === 'user';
+  const isDead = isUser ? !!c.revoked_at : !c.enabled;
+  const deleteLabel = isUser ? 'Revoke' : 'Delete';
 
   return (
     <li className="card p-4">
@@ -241,17 +246,95 @@ function ClientCard({ client: c }: { client: Client }) {
             created:{' '}
             <span className="text-ink-2">{new Date(c.created_at).toLocaleString()}</span>
           </p>
-          <button
-            type="button"
-            disabled={toggle.isPending}
-            onClick={() => toggle.mutate(!c.enabled)}
-            className="btn-ghost focus-ring text-[11.5px] text-ink-2 disabled:opacity-50"
-          >
-            {c.enabled ? 'Disable' : 'Enable'}
-          </button>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              disabled={toggle.isPending}
+              onClick={() => toggle.mutate(!c.enabled)}
+              className="btn-ghost focus-ring text-[11.5px] text-ink-2 disabled:opacity-50"
+            >
+              {c.enabled ? 'Disable' : 'Enable'}
+            </button>
+            <button
+              type="button"
+              disabled={isDead}
+              onClick={() => setConfirming(true)}
+              className="btn-ghost focus-ring text-[11.5px] text-status-blocked-600 disabled:opacity-40"
+              title={isDead ? `Already ${isUser ? 'revoked' : 'disabled'}` : deleteLabel}
+            >
+              {deleteLabel}
+            </button>
+          </div>
         </div>
       </div>
+      {confirming ? (
+        <RevokeClientModal client={c} onClose={() => setConfirming(false)} />
+      ) : null}
     </li>
+  );
+}
+
+function RevokeClientModal({ client: c, onClose }: { client: Client; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  const isUser = c.kind === 'user';
+  const title = isUser ? 'Revoke personal client' : 'Disable agent client';
+  const body = isUser
+    ? 'The bearer will stop resolving. The doc is kept so the audit trail (last_used_at, rotated_at) survives. Mint a new client to issue a replacement.'
+    : 'The bearer will be disabled. The doc is kept so you can re-enable later. Connected integrations will start failing on the next call.';
+
+  const revoke = useMutation({
+    mutationFn: () => api.revokeClient(c.name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['clients'] });
+      onClose();
+    },
+    onError: (err) => setError((err as Error).message),
+  });
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={title}
+      size="sm"
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="btn-secondary focus-ring">
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={revoke.isPending}
+            onClick={() => revoke.mutate()}
+            className="btn-primary focus-ring bg-status-blocked-500/20 text-status-blocked-600 ring-1 ring-inset ring-status-blocked-500/40 hover:bg-status-blocked-500/30 disabled:opacity-50"
+          >
+            {revoke.isPending ? 'Working…' : isUser ? 'Revoke bearer' : 'Disable agent'}
+          </button>
+        </>
+      }
+    >
+      <p className="text-[13px] text-ink-2">{body}</p>
+      <div className="mt-3 card-inset space-y-1 p-3 text-[12px]">
+        <p className="text-ink-3">
+          <span className="text-ink-4">name:</span>{' '}
+          <span className="font-mono text-ink-2">{c.name}</span>
+        </p>
+        <p className="text-ink-3">
+          <span className="text-ink-4">display:</span>{' '}
+          <span className="text-ink-2">{c.display_name}</span>
+        </p>
+        <p className="text-ink-3">
+          <span className="text-ink-4">kind:</span>{' '}
+          <span className="text-ink-2">{c.kind}</span>
+        </p>
+        <p className="text-ink-3">
+          <span className="text-ink-4">scope:</span>{' '}
+          <span className="text-ink-2">{c.scope}</span>
+        </p>
+      </div>
+      {error ? <p className="mt-3 text-[12px] text-status-blocked-600">{error}</p> : null}
+    </Modal>
   );
 }
 
