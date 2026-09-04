@@ -1,0 +1,58 @@
+# .gcloudignore at the repo root so `gcloud run deploy --source .`
+# only uploads what Cloud Build actually needs to build the image.
+# Without this, gcloud uploads the full working tree (including the
+# 838MB node_modules), which stalls the deploy and can fail outright.
+
+# Build artifacts already in the image — never upload them.
+node_modules
+.next
+out
+dist
+build
+.turbo
+.cache
+.gcloud-tmp
+.gcloud-build
+.firebase
+.firebase-cache
+.eslintcache
+*.tsbuildinfo
+
+# VCS + editor + OS junk.
+.git
+.gitignore
+.gitattributes
+.DS_Store
+.idea
+.vscode
+
+# Logs and emulator state.
+*.log
+firestore-debug.log
+coverage
+.nyc_output
+
+# Docs and meta — not needed to build the image.
+*.md
+docs
+scripts
+
+# Other workspaces — the Dockerfile only needs apps/api + packages/types.
+# Including the web workspace would upload .next/, its own node_modules,
+# the whole Firebase web app, etc.
+web
+functions
+firebase.json
+firestore.rules
+firestore.rules.dev
+firestore.indexes.json
+.firebaserc
+.firebase.json
+
+# Local secrets and env files.
+.env
+.env.*
+*.pem
+*.key
+service-account*.json
+gcp-credentials.json
