@@ -23,7 +23,12 @@ export interface Config {
 }
 
 function readEnv(name: string, fallback?: string): string {
-  const v = process.env[name];
+  // Trim trailing whitespace — Secret Manager can attach a final
+  // `\n` to the value, and `gcloud run deploy --set-env-vars` /
+  // `kubectl create secret` users sometimes copy-paste with a
+  // trailing space. Either way the value the operator thinks
+  // they wrote isn't the value the runtime sees.
+  const v = process.env[name]?.replace(/\s+$/, '');
   if (v && v.length > 0) return v;
   if (fallback !== undefined) return fallback;
   throw new Error(`Missing required environment variable: ${name}`);
