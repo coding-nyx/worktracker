@@ -3,21 +3,6 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
-  "functions": [
-    {
-      "source": "apps/api",
-      "codebase": "worktracker-brain",
-      "runtime": "nodejs22",
-      "predeploy": [
-        "npm --workspace=@worktracker/api run build:functions"
-      ],
-      "ignore": [
-        "Dockerfile",
-        ".dockerignore",
-        "**/Dockerfile*"
-      ]
-    }
-  ],
   "hosting": {
     "target": "default",
     "public": "web/out",

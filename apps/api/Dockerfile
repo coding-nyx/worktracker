@@ -48,6 +48,7 @@ EXPOSE 8080
 # server. The path is absolute because Cloud Run resets the
 # working directory to `/workspace` before running the entry
 # point, so a relative `dist/index.js` would 404 there.
-# No firebase-functions/v2 needed here — that's only for Cloud
-# Functions, which is what `functions.ts` is for.
+# The brain Cloud Run service overrides this CMD at deploy time
+# with `node /usr/src/repo/apps/api/dist/brain-entry.js` to start
+# the Firestore listener + minimal healthcheck server.
 CMD ["node", "/usr/src/repo/apps/api/dist/index.js"]
