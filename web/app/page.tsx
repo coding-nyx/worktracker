@@ -615,13 +615,19 @@ function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
-      className={`flex h-full min-h-[280px] flex-col rounded-2xl border bg-bg-surface/60 backdrop-blur-sm transition-all duration-200 ease-spring ${
+      // Slice 9: cap the column at (viewport - 220px) so the
+      // top bar, board picker, search bar and item-details drawer
+      // stay visible while the cards inside scroll. The
+      // `min-h-[280px]` keeps the column looking like a column
+      // when empty. Sticky header with a translucent background
+      // so cards never bleed through the column title.
+      className={`flex max-h-[calc(100vh-220px)] min-h-[280px] flex-col rounded-2xl border bg-bg-surface/60 backdrop-blur-sm transition-all duration-200 ease-spring ${
         isOver
           ? 'border-brand-500/60 bg-brand-500/5 shadow-glow'
           : 'border-border-subtle'
       }`}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-border-subtle px-3.5 py-2.5">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border-subtle bg-bg-surface/95 px-3.5 py-2.5 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full bg-status-${kind}-500`} />
           <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-2">{label}</h2>
@@ -630,7 +636,7 @@ function KanbanColumn({
           {items.length}
         </span>
       </div>
-      <div className="flex-1 space-y-2 p-2.5">
+      <div className="flex-1 space-y-2 overflow-y-auto p-2.5">
         {items.map((item) => (
           <KanbanCard key={item.id} item={item} onClick={onCardClick} />
         ))}
