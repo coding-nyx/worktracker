@@ -814,7 +814,7 @@ function KanbanColumn({
           : 'border-border-subtle'
       }`}
     >
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-border-subtle bg-bg-surface/95 px-3.5 py-2.5 backdrop-blur-sm">
+      <div className="flex items-center justify-between gap-2 border-b border-border-subtle bg-bg-surface/95 px-3.5 py-2.5 backdrop-blur-sm rounded-t-2xl">
         <div className="flex items-center gap-2">
           <span aria-hidden className={`inline-block h-1.5 w-1.5 rounded-full bg-status-${kind}-500`} />
           <h2 className="text-[13px] font-semibold uppercase tracking-wider text-ink-2">{label}</h2>
@@ -823,8 +823,8 @@ function KanbanColumn({
           {items.length}
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto">
-        <div className="space-y-2 p-2.5">
+      <div className="flex-1 overflow-y-auto rounded-b-2xl">
+        <div className="space-y-2 p-2.5 pt-3">
         {items.map((item) => (
           <KanbanCard key={item.id} item={item} onClick={onCardClick} />
         ))}
