@@ -300,7 +300,16 @@ export default function HomePage() {
       ) : (
         <>
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+            {/*
+              Slice 9 (corrected): the board is a single horizontal
+              row. Columns are fixed-width (w-72) and never wrap.
+              If there are more columns than fit on screen, the
+              board scrolls horizontally. The column itself
+              still scrolls vertically inside (max-h + overflow-y
+              on the card area) so a single tall column doesn't
+              push the page to 5000px tall.
+            */}
+            <div className="flex flex-row gap-4 overflow-x-auto pb-2">
               {boardColumns.map((col) => (
                 <KanbanColumn
                   key={col.id}
@@ -792,13 +801,14 @@ function KanbanColumn({
   return (
     <div
       ref={setNodeRef}
-      // Slice 9: cap the column at (viewport - 220px) so the
-      // top bar, board picker, search bar and item-details drawer
-      // stay visible while the cards inside scroll. The
-      // `min-h-[280px]` keeps the column looking like a column
-      // when empty. Sticky header with a translucent background
-      // so cards never bleed through the column title.
-      className={`flex max-h-[calc(100vh-220px)] min-h-[280px] flex-col rounded-2xl border bg-bg-surface/60 backdrop-blur-sm transition-all duration-200 ease-spring ${
+      // Slice 9 (corrected): each column is a fixed-width
+      // panel. The board's parent flex row handles horizontal
+      // scrolling; this column handles its own vertical
+      // scrolling so a 50-card column doesn't blow up the
+      // page. w-72 (288px) is the standard Trello/Jira
+      // column width; shrink-0 keeps it from collapsing when
+      // the board is narrower than the total column count.
+      className={`flex w-72 shrink-0 max-h-[calc(100vh-220px)] min-h-[280px] flex-col rounded-2xl border bg-bg-surface/60 backdrop-blur-sm transition-all duration-200 ease-spring ${
         isOver
           ? 'border-brand-500/60 bg-brand-500/5 shadow-glow'
           : 'border-border-subtle'
