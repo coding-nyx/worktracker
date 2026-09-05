@@ -20,6 +20,23 @@
 import type { WorkItemKind, WorkItemStatus } from './index.js';
 
 /**
+ * Normalize a status string for the state-machine lookup.
+ *
+ * Board columns sometimes store statuses with a kind prefix the
+ * operator typed in (e.g. `task.in_progress` instead of just
+ * `in_progress`). The state machine's status list is the bare
+ * name (TASK_STATUSES, TICKET_STATUSES, …) — `in_progress` lives
+ * in both task and ticket — so the prefix is redundant. Strip it
+ * here so a kanban drop or REST call with `task.in_progress`
+ * resolves to the same EDGES row as `in_progress`.
+ */
+function normalize(s: WorkItemStatus): WorkItemStatus {
+  if (typeof s !== 'string') return s;
+  const dot = s.indexOf('.');
+  return (dot >= 0 ? s.slice(dot + 1) : s) as WorkItemStatus;
+}
+
+/**
  * The transition graph, one row per (kind, from-status) listing the
  * legal `to_status` values. The keys must be exhaustive — a status
  * that's missing from EDGES is treated as terminal (no outgoing
@@ -95,8 +112,13 @@ export function canTransition(
   // Same-status is a no-op, not a transition. We let it through
   // so the kanban drop on the current column is a quiet success.
   if (from === to) return { ok: true };
-  const allowed = getValidTransitions(from, kind);
-  if (allowed.includes(to)) return { ok: true };
+  // Normalize kind-prefixed statuses (task.in_progress, etc.) so a
+  // board column that stores the prefixed form still resolves.
+  const fromN = normalize(from);
+  const toN = normalize(to);
+  if (fromN === toN) return { ok: true };
+  const allowed = getValidTransitions(fromN, kind);
+  if (allowed.includes(toN)) return { ok: true };
   return {
     ok: false,
     reason: {
@@ -104,9 +126,9 @@ export function canTransition(
       message:
         allowed.length === 0
           ? `${kind} item in status '${from}' is terminal; no outgoing moves.`
-          : `${kind} item cannot move from '${from}' to '${to}'. Allowed: ${allowed.join(', ') || '(none)'}.`,
-      from,
-      to,
+          : `${kind} item cannot move from '${fromN}' to '${toN}'. Allowed: ${allowed.join(', ') || '(none)'}.`,
+      from: fromN,
+      to: toN,
       kind,
       allowed,
     },
