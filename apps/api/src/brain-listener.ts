@@ -28,6 +28,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { handleCommandCreated } from './brain.js';
 import { newRequestTrace, logTraceEvent } from './trace.js';
 import { loadConfig } from './config.js';
+import { getDb } from './firestore.js';
 
 const DEFAULT_MAX_FAILURES = 3;
 
@@ -62,7 +63,15 @@ export function startBrainListener(opts: { db?: Firestore; actor?: string; maxFa
     // Already initialized (e.g. when the Fastify app in the
     // same process called initializeApp first). Swallow.
   }
-  const db = opts.db ?? getFirestore();
+  // Use the local getDb() wrapper, NOT firebase-admin's
+  // getFirestore() directly. The local wrapper calls
+  // db.settings({ ignoreUndefinedProperties: true }), which is
+  // required for the event write — command.source_event_id is
+  // undefined for raw enqueues (e.g. operator-scripts that don't
+  // set it), and the admin SDK otherwise rejects the write with
+  // "Cannot use 'undefined' as a Firestore value (found in field
+  // 'source_event_id')".
+  const db = opts.db ?? getDb();
   const actor = opts.actor ?? 'brain:listener';
   const maxFailures = opts.maxFailures ?? readMaxFailures();
 
