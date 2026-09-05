@@ -823,7 +823,8 @@ function KanbanColumn({
           {items.length}
         </span>
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-2.5">
+      <div className="flex-1 overflow-y-auto">
+        <div className="space-y-2 p-2.5">
         {items.map((item) => (
           <KanbanCard key={item.id} item={item} onClick={onCardClick} />
         ))}
@@ -832,6 +833,7 @@ function KanbanColumn({
             empty
           </div>
         ) : null}
+        </div>
       </div>
     </div>
   );
